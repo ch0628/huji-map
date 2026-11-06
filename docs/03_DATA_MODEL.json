@@ -1,0 +1,1953 @@
+{
+  "profiles": {
+    "description": "인증 사용자 공개 최소 프로필",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK, auth.users(id) FK",
+        "meaning": "Supabase auth 사용자 ID"
+      },
+      {
+        "name": "display_name",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "표시 이름"
+      },
+      {
+        "name": "preferred_language",
+        "sql_type": "text",
+        "rule": "NOT NULL DEFAULT ko",
+        "meaning": "언어 코드"
+      },
+      {
+        "name": "account_status",
+        "sql_type": "text",
+        "rule": "active/suspended/deleted",
+        "meaning": "접근상태, 서버만 수정"
+      },
+      {
+        "name": "created_at",
+        "sql_type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "생성"
+      },
+      {
+        "name": "updated_at",
+        "sql_type": "timestamptz",
+        "rule": "NOT NULL DEFAULT now()",
+        "meaning": "수정"
+      }
+    ]
+  },
+  "user_roles": {
+    "description": "하나의 계정이 여러 역할 가질 수 있음",
+    "columns": [
+      {
+        "name": "user_id",
+        "sql_type": "uuid",
+        "rule": "profiles.id FK, composite PK",
+        "meaning": "회원"
+      },
+      {
+        "name": "role",
+        "sql_type": "text",
+        "rule": "customer/merchant/admin, composite PK",
+        "meaning": "권한"
+      },
+      {
+        "name": "granted_by",
+        "sql_type": "uuid",
+        "rule": "NULL, profiles.id FK",
+        "meaning": "부여 주체"
+      },
+      {
+        "name": "created_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "권한 부여 시각"
+      }
+    ]
+  },
+  "visitor_sessions": {
+    "description": "브라우저/방문 세션 (실제 사람 아님)",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "세션 ID"
+      },
+      {
+        "name": "browser_id",
+        "sql_type": "uuid",
+        "rule": "NOT NULL, indexed",
+        "meaning": "브라우저 식별자"
+      },
+      {
+        "name": "user_id",
+        "sql_type": "uuid",
+        "rule": "NULL, profiles.id FK",
+        "meaning": "로그인 시 회원"
+      },
+      {
+        "name": "started_at",
+        "sql_type": "timestamptz",
+        "rule": "NOT NULL",
+        "meaning": "시작"
+      },
+      {
+        "name": "last_seen_at",
+        "sql_type": "timestamptz",
+        "rule": "NOT NULL",
+        "meaning": "마지막 활동"
+      },
+      {
+        "name": "landing_path",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "진입 경로"
+      },
+      {
+        "name": "referrer",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "직전 페이지"
+      },
+      {
+        "name": "utm_source",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "광고 매체"
+      },
+      {
+        "name": "utm_medium",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "광고 유형"
+      },
+      {
+        "name": "utm_campaign",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "캠페인"
+      },
+      {
+        "name": "utm_content",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "소재"
+      },
+      {
+        "name": "utm_term",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "키워드"
+      },
+      {
+        "name": "device_type",
+        "sql_type": "text",
+        "rule": "mobile/tablet/desktop/unknown",
+        "meaning": "기기 유형"
+      },
+      {
+        "name": "language",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "브라우저 언어"
+      },
+      {
+        "name": "is_test",
+        "sql_type": "boolean",
+        "rule": "DEFAULT false",
+        "meaning": "QA 세션 구분"
+      }
+    ]
+  },
+  "consent_records": {
+    "description": "동의 이력. 개인정보/통계/마케팅 동의 구분",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "동의 기록"
+      },
+      {
+        "name": "user_id",
+        "sql_type": "uuid",
+        "rule": "NULL, profiles.id FK",
+        "meaning": "로그인 회원"
+      },
+      {
+        "name": "browser_id",
+        "sql_type": "uuid",
+        "rule": "NULL",
+        "meaning": "익명 브라우저"
+      },
+      {
+        "name": "consent_type",
+        "sql_type": "text",
+        "rule": "terms/privacy/analytics/marketing",
+        "meaning": "동의 종류"
+      },
+      {
+        "name": "policy_version",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "고지문 버전"
+      },
+      {
+        "name": "accepted",
+        "sql_type": "boolean",
+        "rule": "NOT NULL",
+        "meaning": "동의/철회"
+      },
+      {
+        "name": "recorded_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "기록"
+      },
+      {
+        "name": "withdrawn_at",
+        "sql_type": "timestamptz",
+        "rule": "NULL",
+        "meaning": "철회"
+      }
+    ]
+  },
+  "business_leads": {
+    "description": "가게 접촉 대상 50곳과 H1 모수 관리",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "접촉 대상"
+      },
+      {
+        "name": "business_name",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "가게명"
+      },
+      {
+        "name": "category",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "업종"
+      },
+      {
+        "name": "road_address",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "주소"
+      },
+      {
+        "name": "latitude",
+        "sql_type": "double precision",
+        "rule": "NULL",
+        "meaning": "위도"
+      },
+      {
+        "name": "longitude",
+        "sql_type": "double precision",
+        "rule": "NULL",
+        "meaning": "경도"
+      },
+      {
+        "name": "contact_phone",
+        "sql_type": "text",
+        "rule": "NULL, private",
+        "meaning": "문의 연락처"
+      },
+      {
+        "name": "lead_source",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "확보 경로"
+      },
+      {
+        "name": "assigned_user_id",
+        "sql_type": "uuid",
+        "rule": "NULL, profiles.id FK",
+        "meaning": "담당자"
+      },
+      {
+        "name": "converted_business_id",
+        "sql_type": "uuid",
+        "rule": "NULL, businesses.id FK",
+        "meaning": "실등록 가게"
+      },
+      {
+        "name": "created_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "생성"
+      },
+      {
+        "name": "updated_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "수정"
+      }
+    ]
+  },
+  "lead_contact_attempts": {
+    "description": "연락 실적. 시도와 실등록은 별개",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "연락 시도"
+      },
+      {
+        "name": "lead_id",
+        "sql_type": "uuid",
+        "rule": "business_leads.id FK",
+        "meaning": "접촉 가게"
+      },
+      {
+        "name": "contacted_by",
+        "sql_type": "uuid",
+        "rule": "profiles.id FK",
+        "meaning": "연락한 팀원"
+      },
+      {
+        "name": "contacted_at",
+        "sql_type": "timestamptz",
+        "rule": "NOT NULL",
+        "meaning": "연락 시각"
+      },
+      {
+        "name": "channel",
+        "sql_type": "text",
+        "rule": "visit/phone/message/email",
+        "meaning": "채널"
+      },
+      {
+        "name": "result",
+        "sql_type": "text",
+        "rule": "no_answer/rejected/interested/agreed/follow_up",
+        "meaning": "결과"
+      },
+      {
+        "name": "notes",
+        "sql_type": "text",
+        "rule": "NULL, private",
+        "meaning": "메모"
+      },
+      {
+        "name": "next_contact_at",
+        "sql_type": "timestamptz",
+        "rule": "NULL",
+        "meaning": "후속 연락"
+      }
+    ]
+  },
+  "businesses": {
+    "description": "제휴 가게 기본·승인 정보",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "가게 ID"
+      },
+      {
+        "name": "name",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "가게명"
+      },
+      {
+        "name": "category",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "업종"
+      },
+      {
+        "name": "description",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "설명"
+      },
+      {
+        "name": "road_address",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "도로명주소"
+      },
+      {
+        "name": "jibun_address",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "지번"
+      },
+      {
+        "name": "address_detail",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "상세위치"
+      },
+      {
+        "name": "latitude",
+        "sql_type": "double precision",
+        "rule": "NOT NULL",
+        "meaning": "위도"
+      },
+      {
+        "name": "longitude",
+        "sql_type": "double precision",
+        "rule": "NOT NULL",
+        "meaning": "경도"
+      },
+      {
+        "name": "phone",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "가게 공개 전화번호"
+      },
+      {
+        "name": "website_url",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "사이트"
+      },
+      {
+        "name": "registration_status",
+        "sql_type": "text",
+        "rule": "draft/pending/approved/rejected/suspended",
+        "meaning": "승인 상태"
+      },
+      {
+        "name": "created_by",
+        "sql_type": "uuid",
+        "rule": "profiles.id FK",
+        "meaning": "등록자"
+      },
+      {
+        "name": "approved_by",
+        "sql_type": "uuid",
+        "rule": "NULL, profiles.id FK",
+        "meaning": "승인 관리자"
+      },
+      {
+        "name": "approved_at",
+        "sql_type": "timestamptz",
+        "rule": "NULL",
+        "meaning": "승인 시각"
+      },
+      {
+        "name": "rejection_reason",
+        "sql_type": "text",
+        "rule": "NULL, private",
+        "meaning": "반려 사유"
+      },
+      {
+        "name": "created_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "생성"
+      },
+      {
+        "name": "updated_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "수정"
+      }
+    ]
+  },
+  "business_members": {
+    "description": "가게 계정 소속/역할",
+    "columns": [
+      {
+        "name": "business_id",
+        "sql_type": "uuid",
+        "rule": "businesses.id FK, composite PK",
+        "meaning": "가게"
+      },
+      {
+        "name": "user_id",
+        "sql_type": "uuid",
+        "rule": "profiles.id FK, composite PK",
+        "meaning": "회원"
+      },
+      {
+        "name": "role",
+        "sql_type": "text",
+        "rule": "owner/manager",
+        "meaning": "가게 내부 권한"
+      },
+      {
+        "name": "membership_status",
+        "sql_type": "text",
+        "rule": "active/revoked",
+        "meaning": "회원상태"
+      },
+      {
+        "name": "joined_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "가입 시각"
+      }
+    ]
+  },
+  "business_verifications": {
+    "description": "가게 운영권한 인증 근거(관리자만 접근)",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "검증 ID"
+      },
+      {
+        "name": "business_id",
+        "sql_type": "uuid",
+        "rule": "businesses.id FK",
+        "meaning": "가게"
+      },
+      {
+        "name": "submitted_by",
+        "sql_type": "uuid",
+        "rule": "profiles.id FK",
+        "meaning": "제출자"
+      },
+      {
+        "name": "method",
+        "sql_type": "text",
+        "rule": "in_person/phone/document",
+        "meaning": "확인방식"
+      },
+      {
+        "name": "registration_number",
+        "sql_type": "text",
+        "rule": "NULL, private",
+        "meaning": "사업자등록번호(동일점포 확인용)"
+      },
+      {
+        "name": "evidence_storage_path",
+        "sql_type": "text",
+        "rule": "NULL, private",
+        "meaning": "증빙 사진/파일"
+      },
+      {
+        "name": "status",
+        "sql_type": "text",
+        "rule": "pending/approved/rejected",
+        "meaning": "확인상태"
+      },
+      {
+        "name": "reviewed_by",
+        "sql_type": "uuid",
+        "rule": "NULL, profiles.id FK",
+        "meaning": "관리자"
+      },
+      {
+        "name": "reviewed_at",
+        "sql_type": "timestamptz",
+        "rule": "NULL",
+        "meaning": "시각"
+      },
+      {
+        "name": "review_notes",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "검증 메모"
+      },
+      {
+        "name": "created_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "제출"
+      }
+    ]
+  },
+  "business_hours": {
+    "description": "가게 영업시간(화장실 개방시간과 별도)",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "영업시간 행"
+      },
+      {
+        "name": "business_id",
+        "sql_type": "uuid",
+        "rule": "businesses.id FK",
+        "meaning": "가게"
+      },
+      {
+        "name": "weekday",
+        "sql_type": "smallint",
+        "rule": "CHECK 0..6",
+        "meaning": "요일"
+      },
+      {
+        "name": "opens_at",
+        "sql_type": "time",
+        "rule": "NULL",
+        "meaning": "개점"
+      },
+      {
+        "name": "closes_at",
+        "sql_type": "time",
+        "rule": "NULL",
+        "meaning": "폐점"
+      },
+      {
+        "name": "is_closed",
+        "sql_type": "boolean",
+        "rule": "NOT NULL DEFAULT false",
+        "meaning": "휴업"
+      },
+      {
+        "name": "crosses_midnight",
+        "sql_type": "boolean",
+        "rule": "DEFAULT false",
+        "meaning": "익일 걸침"
+      }
+    ]
+  },
+  "public_data_sources": {
+    "description": "공공 데이터 출처/라이선스",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "출처 ID"
+      },
+      {
+        "name": "provider_name",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "기관명"
+      },
+      {
+        "name": "dataset_name",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "자료명"
+      },
+      {
+        "name": "source_url",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "공식 URL"
+      },
+      {
+        "name": "api_endpoint",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "API 주소"
+      },
+      {
+        "name": "license_name",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "라이선스"
+      },
+      {
+        "name": "license_url",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "라이선스 링크"
+      },
+      {
+        "name": "attribution_text",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "출처 고지문"
+      },
+      {
+        "name": "last_synced_at",
+        "sql_type": "timestamptz",
+        "rule": "NULL",
+        "meaning": "최종 갱신"
+      },
+      {
+        "name": "created_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "등록"
+      }
+    ]
+  },
+  "public_import_runs": {
+    "description": "수집 처리 이력",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "실행 ID"
+      },
+      {
+        "name": "source_id",
+        "sql_type": "uuid",
+        "rule": "public_data_sources.id FK",
+        "meaning": "출처"
+      },
+      {
+        "name": "started_at",
+        "sql_type": "timestamptz",
+        "rule": "NOT NULL",
+        "meaning": "시작"
+      },
+      {
+        "name": "finished_at",
+        "sql_type": "timestamptz",
+        "rule": "NULL",
+        "meaning": "종료"
+      },
+      {
+        "name": "status",
+        "sql_type": "text",
+        "rule": "running/success/failed",
+        "meaning": "상태"
+      },
+      {
+        "name": "fetched_count",
+        "sql_type": "integer",
+        "rule": "DEFAULT 0",
+        "meaning": "수집"
+      },
+      {
+        "name": "inserted_count",
+        "sql_type": "integer",
+        "rule": "DEFAULT 0",
+        "meaning": "삽입"
+      },
+      {
+        "name": "updated_count",
+        "sql_type": "integer",
+        "rule": "DEFAULT 0",
+        "meaning": "갱신"
+      },
+      {
+        "name": "error_count",
+        "sql_type": "integer",
+        "rule": "DEFAULT 0",
+        "meaning": "오류 수"
+      },
+      {
+        "name": "error_message",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "사유"
+      }
+    ]
+  },
+  "restrooms": {
+    "description": "공공·제휴 화장실 공통 원천",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "화장실"
+      },
+      {
+        "name": "business_id",
+        "sql_type": "uuid",
+        "rule": "NULL, businesses.id FK; required partner",
+        "meaning": "제휴 가게"
+      },
+      {
+        "name": "source_id",
+        "sql_type": "uuid",
+        "rule": "NULL, public_data_sources.id FK; required public",
+        "meaning": "공공 출처"
+      },
+      {
+        "name": "source_record_id",
+        "sql_type": "text",
+        "rule": "NULL; unique(source_id,source_record_id)",
+        "meaning": "원천 식별자"
+      },
+      {
+        "name": "type",
+        "sql_type": "text",
+        "rule": "public/partner",
+        "meaning": "종류"
+      },
+      {
+        "name": "name",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "이름"
+      },
+      {
+        "name": "description",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "소개"
+      },
+      {
+        "name": "road_address",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "주소"
+      },
+      {
+        "name": "address_detail",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "상세 위치"
+      },
+      {
+        "name": "latitude",
+        "sql_type": "double precision",
+        "rule": "NOT NULL, -90..90",
+        "meaning": "위도"
+      },
+      {
+        "name": "longitude",
+        "sql_type": "double precision",
+        "rule": "NOT NULL, -180..180",
+        "meaning": "경도"
+      },
+      {
+        "name": "floor",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "층"
+      },
+      {
+        "name": "entrance_instructions",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "입구 설명"
+      },
+      {
+        "name": "gender_type",
+        "sql_type": "text",
+        "rule": "male/female/separate/unisex/unknown",
+        "meaning": "유형"
+      },
+      {
+        "name": "wheelchair_accessible",
+        "sql_type": "boolean",
+        "rule": "NULL=미확인",
+        "meaning": "휠체어"
+      },
+      {
+        "name": "baby_changing_available",
+        "sql_type": "boolean",
+        "rule": "NULL=미확인",
+        "meaning": "기저귀"
+      },
+      {
+        "name": "sanitary_products_available",
+        "sql_type": "boolean",
+        "rule": "NULL=미확인",
+        "meaning": "생리대"
+      },
+      {
+        "name": "access_method",
+        "sql_type": "text",
+        "rule": "open/ask_staff/pin",
+        "meaning": "출입 방식"
+      },
+      {
+        "name": "publication_status",
+        "sql_type": "text",
+        "rule": "draft/pending/published/suspended/archived",
+        "meaning": "공개 상태"
+      },
+      {
+        "name": "last_verified_at",
+        "sql_type": "timestamptz",
+        "rule": "NULL",
+        "meaning": "실제 정보 확인일"
+      },
+      {
+        "name": "created_by",
+        "sql_type": "uuid",
+        "rule": "NULL, profiles.id FK",
+        "meaning": "등록자"
+      },
+      {
+        "name": "approved_by",
+        "sql_type": "uuid",
+        "rule": "NULL, profiles.id FK",
+        "meaning": "승인자"
+      },
+      {
+        "name": "created_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "생성"
+      },
+      {
+        "name": "updated_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "수정"
+      }
+    ]
+  },
+  "restroom_hours": {
+    "description": "화장실 이용가능 시간. 하나의 요일 복수 시간구간 가능",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "시간 행"
+      },
+      {
+        "name": "restroom_id",
+        "sql_type": "uuid",
+        "rule": "restrooms.id FK",
+        "meaning": "화장실"
+      },
+      {
+        "name": "weekday",
+        "sql_type": "smallint",
+        "rule": "CHECK 0..6",
+        "meaning": "요일"
+      },
+      {
+        "name": "opens_at",
+        "sql_type": "time",
+        "rule": "NULL",
+        "meaning": "열림"
+      },
+      {
+        "name": "closes_at",
+        "sql_type": "time",
+        "rule": "NULL",
+        "meaning": "닫힘"
+      },
+      {
+        "name": "is_closed",
+        "sql_type": "boolean",
+        "rule": "DEFAULT false",
+        "meaning": "휴무"
+      },
+      {
+        "name": "crosses_midnight",
+        "sql_type": "boolean",
+        "rule": "DEFAULT false",
+        "meaning": "익일 종료"
+      }
+    ]
+  },
+  "restroom_hour_exceptions": {
+    "description": "특별 휴무/임시 운영",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "예외"
+      },
+      {
+        "name": "restroom_id",
+        "sql_type": "uuid",
+        "rule": "restrooms.id FK",
+        "meaning": "화장실"
+      },
+      {
+        "name": "exception_date",
+        "sql_type": "date",
+        "rule": "NOT NULL",
+        "meaning": "해당 날짜"
+      },
+      {
+        "name": "is_closed",
+        "sql_type": "boolean",
+        "rule": "DEFAULT false",
+        "meaning": "휴무"
+      },
+      {
+        "name": "opens_at",
+        "sql_type": "time",
+        "rule": "NULL",
+        "meaning": "변경 시작"
+      },
+      {
+        "name": "closes_at",
+        "sql_type": "time",
+        "rule": "NULL",
+        "meaning": "변경 종료"
+      },
+      {
+        "name": "reason",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "이유"
+      },
+      {
+        "name": "created_by",
+        "sql_type": "uuid",
+        "rule": "profiles.id FK",
+        "meaning": "입력자"
+      },
+      {
+        "name": "created_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "기록"
+      }
+    ]
+  },
+  "restroom_access_policies": {
+    "description": "버전 있는 이용조건. 과거 결제 가격 고정",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "정책 ID"
+      },
+      {
+        "name": "restroom_id",
+        "sql_type": "uuid",
+        "rule": "restrooms.id FK",
+        "meaning": "화장실"
+      },
+      {
+        "name": "version",
+        "sql_type": "integer",
+        "rule": ">=1; unique(restroom_id,version)",
+        "meaning": "버전"
+      },
+      {
+        "name": "access_mode",
+        "sql_type": "text",
+        "rule": "free/test_deposit/real_deposit",
+        "meaning": "결제 방식"
+      },
+      {
+        "name": "deposit_amount_krw",
+        "sql_type": "integer",
+        "rule": "NULL or >=0",
+        "meaning": "보증금"
+      },
+      {
+        "name": "refund_eligible",
+        "sql_type": "boolean",
+        "rule": "NOT NULL DEFAULT false",
+        "meaning": "환급대상 여부"
+      },
+      {
+        "name": "receipt_window_hours",
+        "sql_type": "integer",
+        "rule": "NULL or >0",
+        "meaning": "제출기한 테스트값"
+      },
+      {
+        "name": "min_purchase_krw",
+        "sql_type": "integer",
+        "rule": "NULL or >=0",
+        "meaning": "최소구매 임시값"
+      },
+      {
+        "name": "is_active",
+        "sql_type": "boolean",
+        "rule": "DEFAULT false; 1 active per restroom",
+        "meaning": "적용 여부"
+      },
+      {
+        "name": "effective_from",
+        "sql_type": "timestamptz",
+        "rule": "NOT NULL",
+        "meaning": "시작"
+      },
+      {
+        "name": "created_by",
+        "sql_type": "uuid",
+        "rule": "profiles.id FK",
+        "meaning": "생성자"
+      },
+      {
+        "name": "created_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "등록"
+      }
+    ]
+  },
+  "restroom_photos": {
+    "description": "전시 가능한 검수 사진",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "사진"
+      },
+      {
+        "name": "restroom_id",
+        "sql_type": "uuid",
+        "rule": "restrooms.id FK",
+        "meaning": "화장실"
+      },
+      {
+        "name": "storage_path",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "파일 경로"
+      },
+      {
+        "name": "photo_type",
+        "sql_type": "text",
+        "rule": "exterior/entrance/interior/signage/other",
+        "meaning": "용도"
+      },
+      {
+        "name": "is_primary",
+        "sql_type": "boolean",
+        "rule": "DEFAULT false",
+        "meaning": "대표"
+      },
+      {
+        "name": "moderation_status",
+        "sql_type": "text",
+        "rule": "pending/approved/rejected",
+        "meaning": "승인"
+      },
+      {
+        "name": "uploaded_by",
+        "sql_type": "uuid",
+        "rule": "profiles.id FK",
+        "meaning": "제출자"
+      },
+      {
+        "name": "created_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "생성"
+      }
+    ]
+  },
+  "restroom_lock_secrets": {
+    "description": "절대 공개조회 금지. AES-256-GCM 암호화",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "키 ID"
+      },
+      {
+        "name": "restroom_id",
+        "sql_type": "uuid",
+        "rule": "restrooms.id FK",
+        "meaning": "화장실"
+      },
+      {
+        "name": "ciphertext_b64",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "암호문"
+      },
+      {
+        "name": "iv_b64",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "초기화벡터"
+      },
+      {
+        "name": "auth_tag_b64",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "무결성 태그"
+      },
+      {
+        "name": "key_version",
+        "sql_type": "integer",
+        "rule": "NOT NULL",
+        "meaning": "암호화키 버전"
+      },
+      {
+        "name": "code_version",
+        "sql_type": "integer",
+        "rule": "NOT NULL",
+        "meaning": "PIN 버전"
+      },
+      {
+        "name": "valid_from",
+        "sql_type": "timestamptz",
+        "rule": "NOT NULL",
+        "meaning": "시작"
+      },
+      {
+        "name": "valid_until",
+        "sql_type": "timestamptz",
+        "rule": "NULL",
+        "meaning": "종료"
+      },
+      {
+        "name": "status",
+        "sql_type": "text",
+        "rule": "active/rotated/revoked",
+        "meaning": "상태"
+      },
+      {
+        "name": "created_by",
+        "sql_type": "uuid",
+        "rule": "profiles.id FK",
+        "meaning": "등록자"
+      },
+      {
+        "name": "created_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "등록"
+      }
+    ]
+  },
+  "access_sessions": {
+    "description": "실제 접근 권한/출입 시도",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "이용권 ID"
+      },
+      {
+        "name": "user_id",
+        "sql_type": "uuid",
+        "rule": "profiles.id FK",
+        "meaning": "손님"
+      },
+      {
+        "name": "restroom_id",
+        "sql_type": "uuid",
+        "rule": "restrooms.id FK",
+        "meaning": "대상"
+      },
+      {
+        "name": "policy_id",
+        "sql_type": "uuid",
+        "rule": "restroom_access_policies.id FK",
+        "meaning": "구매 당시 정책"
+      },
+      {
+        "name": "status",
+        "sql_type": "text",
+        "rule": "created/authorized/code_revealed/completed/failed/expired/canceled",
+        "meaning": "진행상태"
+      },
+      {
+        "name": "access_method_snapshot",
+        "sql_type": "text",
+        "rule": "open/ask_staff/pin",
+        "meaning": "구매 당시 유형"
+      },
+      {
+        "name": "idempotency_key",
+        "sql_type": "text",
+        "rule": "UNIQUE",
+        "meaning": "중복 발급 방지"
+      },
+      {
+        "name": "authorized_at",
+        "sql_type": "timestamptz",
+        "rule": "NULL",
+        "meaning": "승인"
+      },
+      {
+        "name": "code_revealed_at",
+        "sql_type": "timestamptz",
+        "rule": "NULL",
+        "meaning": "PIN 표시"
+      },
+      {
+        "name": "expires_at",
+        "sql_type": "timestamptz",
+        "rule": "NOT NULL",
+        "meaning": "이용권 만료"
+      },
+      {
+        "name": "created_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "생성"
+      },
+      {
+        "name": "updated_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "수정"
+      }
+    ]
+  },
+  "pin_reveal_audits": {
+    "description": "PIN 값은 저장하지 않음",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "감사 ID"
+      },
+      {
+        "name": "access_session_id",
+        "sql_type": "uuid",
+        "rule": "access_sessions.id FK",
+        "meaning": "이용권"
+      },
+      {
+        "name": "user_id",
+        "sql_type": "uuid",
+        "rule": "profiles.id FK",
+        "meaning": "요청자"
+      },
+      {
+        "name": "code_version",
+        "sql_type": "integer",
+        "rule": "NULL",
+        "meaning": "요청된 버전"
+      },
+      {
+        "name": "result",
+        "sql_type": "text",
+        "rule": "success/denied/error",
+        "meaning": "결과"
+      },
+      {
+        "name": "reason",
+        "sql_type": "text",
+        "rule": "NULL, PIN 제외",
+        "meaning": "사유"
+      },
+      {
+        "name": "created_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "시각"
+      }
+    ]
+  },
+  "visit_confirmations": {
+    "description": "이용 성공 주장·확인 구분",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "확인 ID"
+      },
+      {
+        "name": "access_session_id",
+        "sql_type": "uuid",
+        "rule": "access_sessions.id FK",
+        "meaning": "이용권"
+      },
+      {
+        "name": "usage_status",
+        "sql_type": "text",
+        "rule": "success/failed/unknown",
+        "meaning": "주장 결과"
+      },
+      {
+        "name": "verification_method",
+        "sql_type": "text",
+        "rule": "user/merchant/operator",
+        "meaning": "확인 주체"
+      },
+      {
+        "name": "verified_by",
+        "sql_type": "uuid",
+        "rule": "NULL, profiles.id FK",
+        "meaning": "확인 사용자"
+      },
+      {
+        "name": "arrival_confirmed_at",
+        "sql_type": "timestamptz",
+        "rule": "NULL",
+        "meaning": "도착 신고"
+      },
+      {
+        "name": "failure_reason",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "실패 사유"
+      },
+      {
+        "name": "verified_at",
+        "sql_type": "timestamptz",
+        "rule": "NULL",
+        "meaning": "확인 시각"
+      }
+    ]
+  },
+  "payment_orders": {
+    "description": "Toss 테스트 주문과 승인 결과",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "내부 주문 ID"
+      },
+      {
+        "name": "access_session_id",
+        "sql_type": "uuid",
+        "rule": "access_sessions.id FK",
+        "meaning": "이용권"
+      },
+      {
+        "name": "user_id",
+        "sql_type": "uuid",
+        "rule": "profiles.id FK",
+        "meaning": "주문자"
+      },
+      {
+        "name": "order_id",
+        "sql_type": "text",
+        "rule": "UNIQUE",
+        "meaning": "PG 주문번호"
+      },
+      {
+        "name": "provider",
+        "sql_type": "text",
+        "rule": "toss",
+        "meaning": "PG"
+      },
+      {
+        "name": "payment_mode",
+        "sql_type": "text",
+        "rule": "test ONLY",
+        "meaning": "모드"
+      },
+      {
+        "name": "amount_krw",
+        "sql_type": "integer",
+        "rule": ">0",
+        "meaning": "당시 주문 금액"
+      },
+      {
+        "name": "status",
+        "sql_type": "text",
+        "rule": "created/pending/approved/failed/canceled",
+        "meaning": "주문상태"
+      },
+      {
+        "name": "provider_payment_key",
+        "sql_type": "text",
+        "rule": "NULL, UNIQUE, private",
+        "meaning": "PG 결제키"
+      },
+      {
+        "name": "idempotency_key",
+        "sql_type": "text",
+        "rule": "UNIQUE",
+        "meaning": "중복 승인 방지"
+      },
+      {
+        "name": "approved_at",
+        "sql_type": "timestamptz",
+        "rule": "NULL",
+        "meaning": "승인"
+      },
+      {
+        "name": "failure_code",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "오류코드"
+      },
+      {
+        "name": "created_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "생성"
+      },
+      {
+        "name": "updated_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "수정"
+      }
+    ]
+  },
+  "payment_refunds": {
+    "description": "1회 전액환급 MVP. API 응답과 성공 분리",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "환급 ID"
+      },
+      {
+        "name": "payment_order_id",
+        "sql_type": "uuid",
+        "rule": "payment_orders.id FK UNIQUE",
+        "meaning": "원결제"
+      },
+      {
+        "name": "receipt_submission_id",
+        "sql_type": "uuid",
+        "rule": "NULL, receipt_submissions.id FK",
+        "meaning": "승인 영수증"
+      },
+      {
+        "name": "amount_krw",
+        "sql_type": "integer",
+        "rule": ">0",
+        "meaning": "환불금액"
+      },
+      {
+        "name": "status",
+        "sql_type": "text",
+        "rule": "requested/processing/succeeded/failed",
+        "meaning": "상태"
+      },
+      {
+        "name": "idempotency_key",
+        "sql_type": "text",
+        "rule": "UNIQUE",
+        "meaning": "중복취소 방지"
+      },
+      {
+        "name": "requested_by",
+        "sql_type": "uuid",
+        "rule": "profiles.id FK",
+        "meaning": "요청 관리자"
+      },
+      {
+        "name": "provider_cancel_id",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "취소 거래 ID"
+      },
+      {
+        "name": "failure_reason",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "실패"
+      },
+      {
+        "name": "requested_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "요청"
+      },
+      {
+        "name": "completed_at",
+        "sql_type": "timestamptz",
+        "rule": "NULL",
+        "meaning": "완료"
+      }
+    ]
+  },
+  "receipt_submissions": {
+    "description": "수동 영수증 심사, OCR 없음",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "제출 ID"
+      },
+      {
+        "name": "access_session_id",
+        "sql_type": "uuid",
+        "rule": "access_sessions.id FK",
+        "meaning": "이용권"
+      },
+      {
+        "name": "user_id",
+        "sql_type": "uuid",
+        "rule": "profiles.id FK",
+        "meaning": "제출자"
+      },
+      {
+        "name": "storage_path",
+        "sql_type": "text",
+        "rule": "NOT NULL, private",
+        "meaning": "영수증 사진"
+      },
+      {
+        "name": "mime_type",
+        "sql_type": "text",
+        "rule": "image/jpeg/png/webp",
+        "meaning": "파일 형식"
+      },
+      {
+        "name": "file_size_bytes",
+        "sql_type": "integer",
+        "rule": ">0, app <= 10MB",
+        "meaning": "용량"
+      },
+      {
+        "name": "original_filename",
+        "sql_type": "text",
+        "rule": "NULL, sanitized",
+        "meaning": "원래 이름"
+      },
+      {
+        "name": "submission_status",
+        "sql_type": "text",
+        "rule": "submitted/review_required/approved/rejected/resubmission_requested",
+        "meaning": "검수 상태"
+      },
+      {
+        "name": "store_name_confirmed",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "관리자 확인 가게명"
+      },
+      {
+        "name": "purchase_at_confirmed",
+        "sql_type": "timestamptz",
+        "rule": "NULL",
+        "meaning": "관리자 확인 구매시각"
+      },
+      {
+        "name": "purchase_amount_krw",
+        "sql_type": "integer",
+        "rule": "NULL",
+        "meaning": "관리자 확인 금액"
+      },
+      {
+        "name": "receipt_reference",
+        "sql_type": "text",
+        "rule": "NULL, private",
+        "meaning": "영수증 식별번호(없을 수 있음)"
+      },
+      {
+        "name": "reviewed_by",
+        "sql_type": "uuid",
+        "rule": "NULL, profiles.id FK",
+        "meaning": "검수자"
+      },
+      {
+        "name": "reviewed_at",
+        "sql_type": "timestamptz",
+        "rule": "NULL",
+        "meaning": "검수 시각"
+      },
+      {
+        "name": "review_reason",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "심사 사유"
+      },
+      {
+        "name": "created_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "제출"
+      }
+    ]
+  },
+  "receipt_review_audits": {
+    "description": "심사 변경 이력: append-only",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "이력 ID"
+      },
+      {
+        "name": "submission_id",
+        "sql_type": "uuid",
+        "rule": "receipt_submissions.id FK",
+        "meaning": "영수증"
+      },
+      {
+        "name": "reviewer_id",
+        "sql_type": "uuid",
+        "rule": "profiles.id FK",
+        "meaning": "심사자"
+      },
+      {
+        "name": "decision",
+        "sql_type": "text",
+        "rule": "approved/rejected/resubmission_requested",
+        "meaning": "판정"
+      },
+      {
+        "name": "reason",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "이유"
+      },
+      {
+        "name": "created_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "기록"
+      }
+    ]
+  },
+  "event_logs": {
+    "description": "사용자 행동 관찰. 거래의 진실 소스 아님",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "이벤트 ID"
+      },
+      {
+        "name": "client_event_id",
+        "sql_type": "uuid",
+        "rule": "UNIQUE",
+        "meaning": "중복 전송 배제"
+      },
+      {
+        "name": "event_name",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "정의된 이벤트명"
+      },
+      {
+        "name": "event_version",
+        "sql_type": "integer",
+        "rule": "DEFAULT 1",
+        "meaning": "스키마 버전"
+      },
+      {
+        "name": "browser_id",
+        "sql_type": "uuid",
+        "rule": "NULL",
+        "meaning": "브라우저"
+      },
+      {
+        "name": "session_id",
+        "sql_type": "uuid",
+        "rule": "NULL, visitor_sessions.id FK",
+        "meaning": "방문세션"
+      },
+      {
+        "name": "user_id",
+        "sql_type": "uuid",
+        "rule": "NULL, profiles.id FK",
+        "meaning": "회원"
+      },
+      {
+        "name": "business_id",
+        "sql_type": "uuid",
+        "rule": "NULL, businesses.id FK",
+        "meaning": "가게"
+      },
+      {
+        "name": "restroom_id",
+        "sql_type": "uuid",
+        "rule": "NULL, restrooms.id FK",
+        "meaning": "화장실"
+      },
+      {
+        "name": "access_session_id",
+        "sql_type": "uuid",
+        "rule": "NULL, access_sessions.id FK",
+        "meaning": "이용권"
+      },
+      {
+        "name": "experiment_key",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "실험"
+      },
+      {
+        "name": "page_path",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "페이지"
+      },
+      {
+        "name": "component_id",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "UI 위치"
+      },
+      {
+        "name": "properties",
+        "sql_type": "jsonb",
+        "rule": "NOT NULL DEFAULT {}",
+        "meaning": "PII/PIN/키 금지"
+      },
+      {
+        "name": "source",
+        "sql_type": "text",
+        "rule": "client/server",
+        "meaning": "발생위치"
+      },
+      {
+        "name": "is_test",
+        "sql_type": "boolean",
+        "rule": "DEFAULT false",
+        "meaning": "실험 제외 여부"
+      },
+      {
+        "name": "occurred_at",
+        "sql_type": "timestamptz",
+        "rule": "NOT NULL",
+        "meaning": "발생 시각"
+      },
+      {
+        "name": "received_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "서버 수신"
+      }
+    ]
+  },
+  "audit_logs": {
+    "description": "중요 변경 관리자 감사(변조 방지)",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "감사 ID"
+      },
+      {
+        "name": "actor_user_id",
+        "sql_type": "uuid",
+        "rule": "NULL, profiles.id FK",
+        "meaning": "실행자"
+      },
+      {
+        "name": "action",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "행위"
+      },
+      {
+        "name": "entity_type",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "대상 테이블"
+      },
+      {
+        "name": "entity_id",
+        "sql_type": "uuid",
+        "rule": "NOT NULL",
+        "meaning": "대상 ID"
+      },
+      {
+        "name": "before_data",
+        "sql_type": "jsonb",
+        "rule": "NULL, 민감필드 마스킹",
+        "meaning": "이전 값"
+      },
+      {
+        "name": "after_data",
+        "sql_type": "jsonb",
+        "rule": "NULL, 민감필드 마스킹",
+        "meaning": "이후 값"
+      },
+      {
+        "name": "reason",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "사유"
+      },
+      {
+        "name": "created_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "기록"
+      }
+    ]
+  },
+  "feature_flags": {
+    "description": "미구현 기능 활성화 제한",
+    "columns": [
+      {
+        "name": "key",
+        "sql_type": "text",
+        "rule": "PK",
+        "meaning": "플래그명"
+      },
+      {
+        "name": "enabled",
+        "sql_type": "boolean",
+        "rule": "DEFAULT false",
+        "meaning": "활성"
+      },
+      {
+        "name": "config",
+        "sql_type": "jsonb",
+        "rule": "DEFAULT {}",
+        "meaning": "테스트 설정"
+      },
+      {
+        "name": "updated_by",
+        "sql_type": "uuid",
+        "rule": "NULL, profiles.id FK",
+        "meaning": "관리자"
+      },
+      {
+        "name": "updated_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "갱신"
+      }
+    ]
+  },
+  "experiments": {
+    "description": "PMF 판정 버전/기간",
+    "columns": [
+      {
+        "name": "id",
+        "sql_type": "uuid",
+        "rule": "PK",
+        "meaning": "실험 ID"
+      },
+      {
+        "name": "experiment_key",
+        "sql_type": "text",
+        "rule": "UNIQUE",
+        "meaning": "식별자"
+      },
+      {
+        "name": "name",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "이름"
+      },
+      {
+        "name": "rules_version",
+        "sql_type": "text",
+        "rule": "NOT NULL",
+        "meaning": "판정 원문 버전"
+      },
+      {
+        "name": "starts_at",
+        "sql_type": "timestamptz",
+        "rule": "NOT NULL",
+        "meaning": "시작"
+      },
+      {
+        "name": "ends_at",
+        "sql_type": "timestamptz",
+        "rule": "NOT NULL",
+        "meaning": "종료"
+      },
+      {
+        "name": "status",
+        "sql_type": "text",
+        "rule": "draft/running/closed",
+        "meaning": "상태"
+      },
+      {
+        "name": "notes",
+        "sql_type": "text",
+        "rule": "NULL",
+        "meaning": "메모"
+      },
+      {
+        "name": "created_at",
+        "sql_type": "timestamptz",
+        "rule": "DEFAULT now()",
+        "meaning": "등록"
+      }
+    ]
+  }
+}
