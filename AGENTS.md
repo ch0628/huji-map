@@ -24,3 +24,13 @@
 
 19. 사용자가 "다음 작업", "계속 진행"이라고 말하면 `IMPLEMENTATION_STATUS.md`에서 가장 앞의 `NOT_STARTED`를 찾아 대응하는 `tasks/NN_*.md` **한 개만 실행**한다. 현재 작업이 BLOCKED인 경우 새 작업으로 건너뛰지 말고 차단 원인을 알려 준다. 별도 사용자의 추가 지시가 있으면 그 지시를 우선한다.
 20. 현재 TASK 수행에 정말 필요한 외부 패키지를 추가할 경우에만 `package.json`, lockfile을 함께 수정할 수 있다. 관련 없는 의존성 업그레이드/대규모 리팩터링은 금지.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+## This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

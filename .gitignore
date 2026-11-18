@@ -11,6 +11,7 @@ node_modules/
 *.key
 credentials.json
 service-account*.json
+supabase/.temp/
 
 # Build and production output
 .next/
@@ -30,4 +31,7 @@ pnpm-debug.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# Local raw data & caches
+local-data/
 

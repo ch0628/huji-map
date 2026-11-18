@@ -27,9 +27,32 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+DROP TRIGGER IF EXISTS set_profiles_updated_at ON public.profiles;
 CREATE TRIGGER set_profiles_updated_at
   BEFORE UPDATE ON public.profiles
   FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+-- Helper trigger function: 일반 사용자의 account_status 및 created_at 임의 변경 차단
+CREATE OR REPLACE FUNCTION public.protect_profile_sensitive_columns()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF (NEW.account_status IS DISTINCT FROM OLD.account_status OR NEW.created_at IS DISTINCT FROM OLD.created_at) THEN
+    IF coalesce(auth.role(), '') IN ('anon', 'authenticated') AND NOT public.is_admin(auth.uid()) THEN
+      RAISE EXCEPTION 'Forbidden: account_status and created_at can only be modified by server or admin';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS enforce_profiles_sensitive_columns ON public.profiles;
+CREATE TRIGGER enforce_profiles_sensitive_columns
+  BEFORE UPDATE ON public.profiles
+  FOR EACH ROW EXECUTE FUNCTION public.protect_profile_sensitive_columns();
 
 -- 3. user_roles: 사용자 권한 관리 (복합 PK, 1계정 다역할)
 CREATE TABLE IF NOT EXISTS public.user_roles (
@@ -43,7 +66,7 @@ CREATE TABLE IF NOT EXISTS public.user_roles (
 CREATE INDEX IF NOT EXISTS idx_user_roles_user_id ON public.user_roles(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_roles_role ON public.user_roles(role);
 
--- Helper function: 관리자 권한 확인 (RLS 및 서버 권한 검증용)
+-- Helper function: 관리자 권한 확인 (RLS 및 서버 권한 검증용, 타인 UUID 열거 차단)
 CREATE OR REPLACE FUNCTION public.is_admin(target_user_id uuid)
 RETURNS boolean
 LANGUAGE sql
@@ -51,12 +74,17 @@ SECURITY DEFINER
 STABLE
 SET search_path = public, pg_temp
 AS $$
-  SELECT EXISTS (
-    SELECT 1
-    FROM public.user_roles
-    WHERE user_id = target_user_id
-      AND role = 'admin'
-  );
+  SELECT CASE
+    WHEN target_user_id IS NULL THEN false
+    WHEN auth.uid() IS NOT NULL AND target_user_id <> auth.uid() THEN false
+    WHEN auth.uid() IS NULL AND coalesce(auth.role(), '') IN ('anon', 'authenticated') THEN false
+    ELSE EXISTS (
+      SELECT 1
+      FROM public.user_roles
+      WHERE user_id = target_user_id
+        AND role = 'admin'
+    )
+  END;
 $$;
 
 -- 4. visitor_sessions: 익명 브라우저 및 방문 세션 추적
@@ -108,6 +136,7 @@ CREATE TABLE IF NOT EXISTS public.feature_flags (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+DROP TRIGGER IF EXISTS set_feature_flags_updated_at ON public.feature_flags;
 CREATE TRIGGER set_feature_flags_updated_at
   BEFORE UPDATE ON public.feature_flags
   FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
@@ -121,7 +150,7 @@ VALUES
 ON CONFLICT (key) DO NOTHING;
 
 -- 7. auth.users 생성 시 자동 프로필 및 기본 역할(customer) 부여 트리거
---    (SECURITY DEFINER, 안전한 search_path 설정, 멱등성 보장)
+--    (SECURITY DEFINER, 안전한 search_path 설정, 멱등성 보장, 최소 실행 권한)
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -152,6 +181,9 @@ BEGIN
 END;
 $$;
 
+REVOKE ALL ON FUNCTION public.handle_new_user() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.handle_new_user() TO postgres, service_role, supabase_auth_admin;
+
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
@@ -178,12 +210,19 @@ CREATE POLICY "profiles_select_own_or_admin"
     OR public.is_admin(auth.uid())
   );
 
--- 본인 프로필 기본정보 수정 (계정 상태 account_status는 서버/관리자 전용 제어)
+-- 본인 프로필 기본정보 수정 (활성 계정만 가능하며, account_status 변경은 트리거 및 정책으로 차단)
 CREATE POLICY "profiles_update_own"
   ON public.profiles
   FOR UPDATE
-  USING (auth.uid() = id)
-  WITH CHECK (auth.uid() = id);
+  USING (auth.uid() = id AND account_status = 'active')
+  WITH CHECK (auth.uid() = id AND account_status = 'active');
+
+-- 관리자 프로필 관리 정책
+CREATE POLICY "profiles_admin_manage"
+  ON public.profiles
+  FOR ALL
+  USING (public.is_admin(auth.uid()))
+  WITH CHECK (public.is_admin(auth.uid()));
 
 -- 8-2. user_roles 정책
 -- 본인 권한 조회 또는 관리자 전체 조회
@@ -223,6 +262,10 @@ CREATE POLICY "visitor_sessions_update_own"
   ON public.visitor_sessions
   FOR UPDATE
   USING (
+    auth.uid() = user_id
+    OR public.is_admin(auth.uid())
+  )
+  WITH CHECK (
     auth.uid() = user_id
     OR public.is_admin(auth.uid())
   );

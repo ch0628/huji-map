@@ -1,0 +1,221 @@
+"use client";
+
+import React from "react";
+import Link from "next/link";
+import type {
+  PublicRestroomSummary,
+  AccessMethod,
+  GenderType,
+} from "@/lib/restrooms/types";
+
+export interface PublicRestroomCardProps {
+  readonly restroom: PublicRestroomSummary;
+  readonly isSelected?: boolean;
+  readonly compact?: boolean;
+  readonly onDirectionsClick?: (restroom: PublicRestroomSummary) => void;
+  readonly onCardClick?: (restroom: PublicRestroomSummary) => void;
+  readonly onPaymentClick?: (restroom: PublicRestroomSummary) => void;
+  readonly onDetailClick?: (restroom: PublicRestroomSummary) => void;
+  readonly showDetailLink?: boolean;
+}
+
+const GENDER_LABELS: Record<GenderType, string> = {
+  separate: "남녀 분리",
+  unisex: "남녀 공용",
+  male: "남성 전용",
+  female: "여성 전용",
+  unknown: "성별 구분 미확인",
+};
+
+const ACCESS_METHOD_LABELS: Record<AccessMethod, string> = {
+  open: "상시 개방",
+  ask_staff: "직원 문의",
+  pin: "도어락 비밀번호",
+};
+
+export default function PublicRestroomCard({
+  restroom,
+  isSelected = false,
+  compact = false,
+  onDirectionsClick,
+  onCardClick,
+  onPaymentClick,
+  onDetailClick,
+  showDetailLink = true,
+}: PublicRestroomCardProps) {
+  const isPartner = restroom.type === "partner";
+
+  const handleCardClick = (e: React.MouseEvent) => {
+    // 버튼이나 링크 클릭 시 카드 클릭 이벤트 전파 방지
+    const target = e.target as HTMLElement;
+    if (target.closest("button") || target.closest("a")) {
+      return;
+    }
+    onCardClick?.(restroom);
+  };
+
+  return (
+    <article
+      data-testid={`public-restroom-card-${restroom.id}`}
+      data-restroom-type={restroom.type}
+      onClick={handleCardClick}
+      className={`rounded-2xl border transition-all ${
+        isSelected
+          ? "border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-slate-900 shadow-md ring-2 ring-blue-400/20"
+          : "border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-sm hover:border-slate-300 dark:hover:border-slate-700"
+      } ${compact ? "p-3.5" : "p-4"}`}
+    >
+      {/* 상단: 구분 뱃지 및 이름 */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* 공공 vs 제휴 구분 뱃지 */}
+            {isPartner ? (
+              <span
+                data-testid="restroom-type-partner-badge"
+                className="inline-flex items-center rounded-md bg-purple-100 px-2 py-0.5 text-xs font-bold text-purple-800 dark:bg-purple-950/80 dark:text-purple-300"
+              >
+                🤝 안심 제휴
+              </span>
+            ) : (
+              <span
+                data-testid="restroom-type-public-badge"
+                className="inline-flex items-center rounded-md bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-800 dark:bg-blue-950/80 dark:text-blue-300"
+              >
+                🏛️ 무료 공공
+              </span>
+            )}
+
+            <h3 className="truncate text-base font-bold text-slate-900 dark:text-white">
+              {restroom.name}
+            </h3>
+          </div>
+
+          <p className="mt-1 truncate text-xs text-slate-600 dark:text-slate-400">
+            {restroom.road_address}
+            {restroom.address_detail ? ` ${restroom.address_detail}` : ""}
+          </p>
+        </div>
+      </div>
+
+      {/* 이용 조건 안내 배너 */}
+      <div className="mt-2.5 rounded-lg bg-slate-50 p-2 text-xs text-slate-700 dark:bg-slate-800/70 dark:text-slate-300">
+        {isPartner ? (
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center justify-between font-medium">
+              <span className="text-purple-700 dark:text-purple-300">
+                🔒 보증금 이용 시설 (테스트 모드)
+              </span>
+              <span className="font-bold text-purple-900 dark:text-purple-200">
+                1,000원
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              이용 후 영수증 인증 시 보증금이 환급됩니다. (현재 결제 기능 준비 중)
+            </p>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between font-medium">
+            <span className="text-blue-700 dark:text-blue-300">
+              ✨ 누구나 무료 이용
+            </span>
+            <span className="font-bold text-blue-900 dark:text-blue-200">
+              무료
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* 속성 배지 목록 */}
+      <div className="mt-2.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+        {/* 출입 방식 */}
+        <span className="rounded bg-slate-100 px-2 py-0.5 font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+          🔑 {ACCESS_METHOD_LABELS[restroom.access_method] || "출입 안내"}
+        </span>
+
+        {/* 성별 구분 */}
+        <span className="rounded bg-slate-100 px-2 py-0.5 font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+          🚻 {GENDER_LABELS[restroom.gender_type] || "성별 미확인"}
+        </span>
+
+        {/* 편의 시설 */}
+        {restroom.wheelchair_accessible === true && (
+          <span className="rounded bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
+            ♿ 휠체어 이용 가능
+          </span>
+        )}
+        {restroom.wheelchair_accessible === false && (
+          <span className="rounded bg-slate-50 px-2 py-0.5 text-slate-400 dark:bg-slate-800/40 dark:text-slate-500">
+            휠체어 진입 어려움
+          </span>
+        )}
+        {restroom.wheelchair_accessible === null && (
+          <span className="rounded bg-slate-50 px-2 py-0.5 text-slate-400 dark:bg-slate-800/40 dark:text-slate-500">
+            휠체어 정보 미확인
+          </span>
+        )}
+
+        {restroom.baby_changing_available && (
+          <span className="rounded bg-amber-50 px-2 py-0.5 font-medium text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
+            👶 기저귀대
+          </span>
+        )}
+
+        {restroom.sanitary_products_available && (
+          <span className="rounded bg-pink-50 px-2 py-0.5 font-medium text-pink-700 dark:bg-pink-950/60 dark:text-pink-300">
+            🧴 위생용품
+          </span>
+        )}
+      </div>
+
+      {/* 액션 버튼 영역 */}
+      <div className="mt-3.5 flex items-center gap-2 pt-3 border-t border-slate-100 dark:border-slate-800/80">
+        {/* 길찾기 버튼: 공공/제휴 공통 지원 */}
+        <button
+          type="button"
+          onClick={() => onDirectionsClick?.(restroom)}
+          data-testid={`directions-btn-${restroom.id}`}
+          className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 active:scale-[0.98] transition"
+        >
+          <span>🧭</span>
+          <span>길찾기</span>
+        </button>
+
+        {/* 제휴 화장실일 때만 별도 보증금 결제 버튼 노출 (공공은 절대 노출 안 함) */}
+        {isPartner && (
+          <div
+            onClick={() => onPaymentClick?.(restroom)}
+            className="flex-1 cursor-pointer"
+          >
+            <button
+              type="button"
+              disabled
+              title="현재 결제 기능 준비 중입니다."
+              data-testid={`partner-payment-btn-${restroom.id}`}
+              className="pointer-events-none flex min-h-[44px] w-full items-center justify-center gap-1 rounded-xl bg-purple-100 px-2 py-2 text-xs font-semibold text-purple-700 opacity-80 cursor-not-allowed dark:bg-purple-950/60 dark:text-purple-300"
+            >
+              <span>💳</span>
+              <span>보증금 결제</span>
+              <span className="rounded bg-purple-200/80 dark:bg-purple-900 px-1 py-0.2 text-[10px] font-normal text-purple-800 dark:text-purple-200">
+                준비 중
+              </span>
+            </button>
+          </div>
+        )}
+
+        {/* 상세 페이지 링크 */}
+        {showDetailLink && (
+          <Link
+            href={`/restrooms/${restroom.id}`}
+            onClick={() => onDetailClick?.(restroom)}
+            data-testid={`detail-link-${restroom.id}`}
+            className="flex min-h-[44px] items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-750"
+          >
+            상세보기 →
+          </Link>
+        )}
+      </div>
+    </article>
+  );
+}
+
