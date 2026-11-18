@@ -43,8 +43,8 @@ export default function MapFilterBar({
             type="text"
             value={searchKeyword}
             onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="지역 또는 장소 검색 (예: 수원역, 행궁동)"
-            aria-label="지역 또는 장소 검색"
+            placeholder="장소 또는 화장실 이름 검색 (예: 수원역, 장안문)"
+            aria-label="장소 또는 화장실 이름 검색"
             enterKeyHint="search"
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.nativeEvent.isComposing) {

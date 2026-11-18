@@ -22,7 +22,7 @@ export default function DepositPaymentModal({
   isOpen,
   onClose,
   user,
-  defaultDepositAmount = 1000,
+  defaultDepositAmount,
   customPaymentRequester,
 }: DepositPaymentModalProps) {
   const router = useRouter();
@@ -31,6 +31,16 @@ export default function DepositPaymentModal({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const isSubmittingRef = useRef<boolean>(false);
   const idempotencyKeyRef = useRef<string>("");
+
+  const resolvedDepositAmount =
+    restroom.active_policy?.access_mode === "test_deposit" &&
+    typeof restroom.active_policy.deposit_amount_krw === "number" &&
+    restroom.active_policy.deposit_amount_krw > 0
+      ? restroom.active_policy.deposit_amount_krw
+      : typeof defaultDepositAmount === "number" && defaultDepositAmount > 0
+      ? defaultDepositAmount
+      : 0;
+  const receiptWindowHours = restroom.active_policy?.receipt_window_hours ?? 24;
 
   const { trackPaymentUnavailableShown } = useEventTracker();
 
@@ -54,11 +64,11 @@ export default function DepositPaymentModal({
         },
         properties: {
           restroom_id: restroom.id,
-          amount_krw: defaultDepositAmount,
+          amount_krw: resolvedDepositAmount,
         },
       });
     }
-  }, [isOpen, restroom, defaultDepositAmount]);
+  }, [isOpen, restroom, resolvedDepositAmount]);
 
   // Handle ESC key to close modal
   useEffect(() => {
@@ -301,7 +311,7 @@ export default function DepositPaymentModal({
           <div className="flex justify-between items-center pt-2 border-t border-slate-200/70 dark:border-slate-700/70">
             <span className="font-medium text-slate-700 dark:text-slate-300">보증금 결제 금액</span>
             <span className="text-base font-extrabold text-purple-600 dark:text-purple-400" data-testid="deposit-amount-display">
-              {defaultDepositAmount.toLocaleString()}원
+              {resolvedDepositAmount.toLocaleString()}원
             </span>
           </div>
         </div>
@@ -320,7 +330,7 @@ export default function DepositPaymentModal({
               <strong>자동 환급 불가:</strong> OCR 자동 승인이 없으며, 영수증 미제출·기한 초과·타 매장 영수증 또는 심사 반려 시 보증금이 자동 환급되지 않습니다.
             </li>
             <li>
-              <strong>환급 신청 기한:</strong> 이용권 생성 시점부터 24시간 이내 (테스트 기본값)
+              <strong>환급 신청 기한:</strong> 이용권 생성 시점부터 {receiptWindowHours}시간 이내
             </li>
             <li>
               <strong>도어락 비밀번호:</strong> 결제 승인 완료 후에만 안전하게 공개되며 현재 화면에는 노출되지 않습니다.
@@ -378,7 +388,7 @@ export default function DepositPaymentModal({
                 </span>
               </>
             ) : (
-              <span>{defaultDepositAmount.toLocaleString()}원 테스트 결제 진행</span>
+              <span>{resolvedDepositAmount.toLocaleString()}원 테스트 결제 진행</span>
             )}
           </button>
 

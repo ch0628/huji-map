@@ -2,17 +2,20 @@
 
 import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import type { Restroom, RestroomAccessPolicy } from "@/lib/restrooms/types";
+import type { Restroom, RestroomAccessPolicy, RestroomHour } from "@/lib/restrooms/types";
+import type { MerchantRestroomPinStatus } from "@/lib/restrooms/merchant-service";
 import RestroomStatusBadge from "@/components/restroom/RestroomStatusBadge";
 import RestroomForm from "@/components/restroom/RestroomForm";
 import RestroomPolicyManager from "@/components/restroom/RestroomPolicyManager";
+import RestroomPinManager from "@/components/restroom/RestroomPinManager";
 import RestroomReviewSubmit from "@/components/restroom/RestroomReviewSubmit";
 
 interface RestroomDetailData extends Restroom {
   businessId: string;
   policies: RestroomAccessPolicy[];
-  hours: any[];
+  hours: RestroomHour[];
   photos: any[];
+  pinStatus?: MerchantRestroomPinStatus;
 }
 
 interface RestroomDetailClientProps {
@@ -172,7 +175,19 @@ export default function RestroomDetailClient({ restroomId }: RestroomDetailClien
         }}
       />
 
-      {/* 3. 이용 정책 관리 섹션 */}
+      {/* 3. 도어락 PIN 관리 섹션 */}
+      <RestroomPinManager
+        restroomId={restroom.id}
+        accessMethod={restroom.access_method}
+        pinStatus={restroom.pinStatus}
+        onPinUpdated={(nextPinStatus) => {
+          setRestroom((prev) =>
+            prev ? { ...prev, pinStatus: nextPinStatus } : prev
+          );
+        }}
+      />
+
+      {/* 4. 이용 정책 관리 섹션 */}
       <RestroomPolicyManager
         restroomId={restroom.id}
         policies={restroom.policies || []}
@@ -191,18 +206,27 @@ export default function RestroomDetailClient({ restroomId }: RestroomDetailClien
         }}
       />
 
-      {/* 4. 화장실 정보 수정 폼 */}
+      {/* 5. 화장실 정보 및 운영시간 수정 폼 */}
       <div className="space-y-2">
         <h2 className="text-sm font-bold text-slate-900 dark:text-white px-1">
-          화장실 정보 수정
+          화장실 정보 및 운영시간 수정
         </h2>
         <RestroomForm
           businessId={restroom.business_id || restroom.businessId}
           initialData={restroom}
+          initialHours={restroom.hours}
           mode="edit"
           publicationStatus={restroom.publication_status}
           onSuccess={(updated) => {
-            setRestroom((prev) => (prev ? { ...prev, ...updated } : prev));
+            setRestroom((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    ...updated,
+                    hours: updated.hours ?? prev.hours,
+                  }
+                : prev
+            );
           }}
         />
       </div>

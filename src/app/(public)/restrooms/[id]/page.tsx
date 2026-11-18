@@ -116,6 +116,16 @@ export default async function RestroomDetailPage({
           description: "행궁동 카페 제휴 화장실 상세 정보",
           entrance_instructions: "카운터 우측 계단 반층 위",
           hours: [{ id: "h1", restroom_id: id, weekday: 1, opens_at: "09:00", closes_at: "22:00", is_closed: false }],
+          active_policy: {
+            id: "mock-policy-1",
+            version: 1,
+            access_mode: "test_deposit",
+            deposit_amount_krw: 1000,
+            refund_eligible: true,
+            receipt_window_hours: 24,
+            min_purchase_krw: 0,
+            effective_from: "2026-11-10T10:00:00Z",
+          },
           photos: [],
         } as any;
       } else if (id === "a1111111-1111-4111-8111-111111111111") {

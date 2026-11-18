@@ -69,6 +69,16 @@ describe("TASK 22: Toss Payments UI & Mobile Checkout Integration Tests", () => 
         is_closed: false,
       },
     ],
+    active_policy: {
+      id: "pol-test-1",
+      version: 1,
+      access_mode: "test_deposit",
+      deposit_amount_krw: 1000,
+      refund_eligible: true,
+      receipt_window_hours: 24,
+      min_purchase_krw: 0,
+      effective_from: "2026-11-10T10:00:00Z",
+    },
     photos: [],
   } as any as PublicRestroomDetail;
 
@@ -250,6 +260,63 @@ describe("TASK 22: Toss Payments UI & Mobile Checkout Integration Tests", () => 
       expect(paymentBtn).toBeTruthy();
       expect(paymentBtn.textContent).toContain("안심 제휴 보증금 결제 (1,000원)");
       expect(screen.getByTestId("detail-partner-badge")).toBeTruthy();
+    });
+
+    it("renders DB deposit amount when test_deposit amount is changed and hides button on free policy", () => {
+      const { rerender } = render(
+        <RestroomDetailClient
+          restroom={{
+            ...dummyPartnerRestroom,
+            active_policy: {
+              ...dummyPartnerRestroom.active_policy!,
+              deposit_amount_krw: 2000,
+            },
+          }}
+        />
+      );
+
+      expect(screen.getByTestId("detail-partner-payment-btn").textContent).toContain(
+        "안심 제휴 보증금 결제 (2,000원)"
+      );
+      expect(screen.getByTestId("partner-deposit-policy-box").textContent).toContain(
+        "2,000원"
+      );
+
+      rerender(
+        <RestroomDetailClient
+          restroom={{
+            ...dummyPartnerRestroom,
+            active_policy: {
+              ...dummyPartnerRestroom.active_policy!,
+              access_mode: "free",
+              deposit_amount_krw: 0,
+              refund_eligible: false,
+            },
+          }}
+        />
+      );
+
+      expect(screen.queryByTestId("detail-partner-payment-btn")).toBeNull();
+      expect(screen.getByTestId("partner-free-policy-box").textContent).toContain(
+        "안심 제휴 무료 이용"
+      );
+      expect(screen.queryByText(/1,000원/)).toBeNull();
+    });
+
+    it("renders '운영시간 정보 없음' when hours are empty and never displays '24시간 운영'", () => {
+      render(
+        <RestroomDetailClient
+          restroom={{
+            ...dummyPartnerRestroom,
+            hours: [],
+          }}
+        />
+      );
+
+      expect(screen.getByTestId("restroom-hours-empty").textContent).toContain(
+        "운영시간 정보 없음"
+      );
+      expect(screen.queryByText("24시간 운영")).toBeNull();
     });
   });
 

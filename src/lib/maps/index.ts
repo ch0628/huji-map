@@ -7,4 +7,5 @@ export * from "./kakao-sdk";
 export * from "./kakao-provider";
 export * from "./directions";
 export * from "./location";
+export * from "./address-search";
 

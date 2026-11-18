@@ -28,6 +28,13 @@ export default function RestroomPolicyManager({
   const [selectedMode, setSelectedMode] = useState<"free_with_ad" | "deposit_with_ad">(
     currentMode === "free_with_ad" ? "deposit_with_ad" : "free_with_ad"
   );
+  const [depositAmountInput, setDepositAmountInput] = useState<string>(
+    String(
+      activePolicy?.deposit_amount_krw && activePolicy.deposit_amount_krw > 0
+        ? activePolicy.deposit_amount_krw
+        : 1000
+    )
+  );
 
   const handleCreatePolicy = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,15 +42,30 @@ export default function RestroomPolicyManager({
 
     setServerError(null);
     setSuccessMessage(null);
+
+    let depositAmountKrw: number | undefined;
+    if (selectedMode === "deposit_with_ad") {
+      const parsedAmount = Number(depositAmountInput);
+      if (!Number.isInteger(parsedAmount) || parsedAmount <= 0) {
+        setServerError("테스트 보증금 금액은 1원 이상의 정수로 입력해 주세요.");
+        return;
+      }
+      depositAmountKrw = parsedAmount;
+    }
+
     setIsSubmitting(true);
 
     const idempotencyKey = crypto.randomUUID();
 
     try {
-      const payload = {
+      const payload: Record<string, unknown> = {
         policy_mode: selectedMode,
         is_active: true,
       };
+      if (selectedMode === "deposit_with_ad" && depositAmountKrw !== undefined) {
+        payload.deposit_amount_krw = depositAmountKrw;
+        payload.receipt_window_hours = 24;
+      }
 
       const res = await fetch(`/api/v1/merchant/restrooms/${restroomId}/policies`, {
         method: "POST",
@@ -136,7 +158,9 @@ export default function RestroomPolicyManager({
               <span className="text-sm font-bold text-slate-900 dark:text-white">
                 {activePolicy.access_mode === "free"
                   ? "무료 모드 (Free)"
-                  : "테스트 보증금 모드 (1,000원)"}
+                  : activePolicy.access_mode === "test_deposit"
+                  ? `테스트 보증금 모드 (${(activePolicy.deposit_amount_krw ?? 0).toLocaleString()}원)`
+                  : `기타 정책 (${activePolicy.access_mode})`}
               </span>
               <span className="text-xs text-slate-500 dark:text-slate-400">
                 시행일: {new Date(activePolicy.effective_from).toLocaleDateString("ko-KR")}
@@ -147,9 +171,12 @@ export default function RestroomPolicyManager({
               <div>
                 <span className="text-slate-400">보증금 금액:</span>{" "}
                 <strong className="text-slate-900 dark:text-white">
-                  {activePolicy.deposit_amount_krw
+                  {activePolicy.access_mode === "free"
+                    ? "0원 (무료)"
+                    : typeof activePolicy.deposit_amount_krw === "number" &&
+                      activePolicy.deposit_amount_krw > 0
                     ? `${activePolicy.deposit_amount_krw.toLocaleString()}원`
-                    : "0원 (무료)"}
+                    : "미설정"}
                 </strong>
               </div>
               <div>
@@ -221,11 +248,31 @@ export default function RestroomPolicyManager({
               onChange={() => setSelectedMode("deposit_with_ad")}
               className="mt-0.5 h-4 w-4 text-blue-600 focus:ring-blue-500"
             />
-            <div className="text-xs">
+            <div className="flex-1 min-w-0 text-xs">
               <span className="font-bold text-slate-900 dark:text-white">테스트 보증금 모드 (환급형)</span>
               <p className="mt-0.5 text-slate-500 dark:text-slate-400">
-                기본 보증금 1,000원, 영수증 24시간 내 제출 시 전액 환급 (테스트 전용)
+                설정한 보증금(기본 1,000원), 영수증 24시간 내 제출 시 전액 환급 (테스트 전용)
               </p>
+              {selectedMode === "deposit_with_ad" && (
+                <div className="mt-2">
+                  <label
+                    htmlFor="policy-deposit-amount"
+                    className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300"
+                  >
+                    테스트 보증금 금액 (원)
+                  </label>
+                  <input
+                    id="policy-deposit-amount"
+                    data-testid="policy-deposit-amount-input"
+                    type="number"
+                    min={100}
+                    step={100}
+                    value={depositAmountInput}
+                    onChange={(e) => setDepositAmountInput(e.target.value)}
+                    className="mt-1 block min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                  />
+                </div>
+              )}
             </div>
           </label>
         </div>
@@ -261,7 +308,12 @@ export default function RestroomPolicyManager({
                 >
                   <div>
                     <span className="font-bold text-slate-900 dark:text-white">
-                      v{p.version} — {p.access_mode === "free" ? "무료" : "테스트 보증금(1,000원)"}
+                      v{p.version} —{" "}
+                      {p.access_mode === "free"
+                        ? "무료"
+                        : p.access_mode === "test_deposit"
+                        ? `테스트 보증금(${(p.deposit_amount_krw ?? 0).toLocaleString()}원)`
+                        : p.access_mode}
                     </span>
                     <span className="block text-[11px] text-slate-400">
                       시행일: {new Date(p.effective_from).toLocaleDateString("ko-KR")}

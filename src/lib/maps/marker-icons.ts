@@ -1,11 +1,17 @@
 /**
  * 마커 아이콘 SVG (data URI) 생성기
  * - 현재 위치: 파란 원형 점 + 흰색 테두리 (핀 모양 아님)
+ * - 검색 장소: 초록색 전용 핀 (WC 문구 없음)
  * - 공공: 파란 화장실 핀 / 제휴: 보라 화장실 핀
  * - 선택: 크기 확대 + 주황 테두리 강조
  */
 
-export type MarkerKind = "public" | "partner" | "current_location" | "default";
+export type MarkerKind =
+  | "public"
+  | "partner"
+  | "current_location"
+  | "search_place"
+  | "default";
 
 export interface MarkerIconSpec {
   readonly src: string;
@@ -42,6 +48,16 @@ function pinSvg(fill: string, selected: boolean): string {
   );
 }
 
+function searchPlacePinSvg(): string {
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="34" height="44" viewBox="0 0 34 44">` +
+    `<path d="M17 1C8.7 1 2 7.7 2 16c0 10.5 15 27 15 27s15-16.5 15-27C32 7.7 25.3 1 17 1z" fill="#16a34a" stroke="#ffffff" stroke-width="2.5"/>` +
+    `<circle cx="17" cy="16" r="7" fill="#ffffff"/>` +
+    `<circle cx="17" cy="16" r="3.5" fill="#15803d"/>` +
+    `</svg>`
+  );
+}
+
 export function getMarkerIcon(
   kind: MarkerKind | undefined,
   selected = false
@@ -53,6 +69,15 @@ export function getMarkerIcon(
       height: 28,
       anchorX: 14,
       anchorY: 14,
+    };
+  }
+  if (kind === "search_place") {
+    return {
+      src: toDataUri(searchPlacePinSvg()),
+      width: 34,
+      height: 44,
+      anchorX: 17,
+      anchorY: 44,
     };
   }
   if (kind === "public" || kind === "partner") {

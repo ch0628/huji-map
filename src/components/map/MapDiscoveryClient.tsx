@@ -42,6 +42,10 @@ export interface MapDiscoveryClientProps {
   readonly onRestroomsLoaded?: (items: PublicRestroomSummary[]) => void;
   /** 장소 검색 함수 주입 (기본: 카카오 장소 검색) */
   readonly placeSearchFn?: PlaceSearchFn;
+  /** 휴지맵 DB 공개 화장실 이름 검색 함수 주입 (기본: /api/v1/restrooms/search) */
+  readonly restroomSearchFn?: (
+    keyword: string
+  ) => Promise<PublicRestroomSummary[]>;
 }
 
 type AnchorMode = "search" | "user" | "center";
@@ -52,12 +56,29 @@ const PROGRAMMATIC_MOVE_GRACE_MS = 1500;
 /** 이 거리 이상 지도 중심이 벗어나면 사용자가 직접 이동한 것으로 간주 */
 const MANUAL_PAN_THRESHOLD_M = 400;
 
+async function defaultRestroomSearch(
+  keyword: string
+): Promise<PublicRestroomSummary[]> {
+  const res = await fetch(
+    `/api/v1/restrooms/search?q=${encodeURIComponent(keyword)}&type=all&limit=10`
+  );
+  if (!res.ok) {
+    throw new Error(`화장실 검색 API 오류: ${res.status}`);
+  }
+  const json = await res.json();
+  if (!json.ok || !json.data) {
+    throw new Error(json.error?.message || "화장실 검색 실패");
+  }
+  return Array.isArray(json.data.items) ? json.data.items : [];
+}
+
 export default function MapDiscoveryClient({
   initialRestroomId,
   initialFilterType = "all",
   providerFactory,
   onRestroomsLoaded,
   placeSearchFn = searchKakaoPlaces,
+  restroomSearchFn = defaultRestroomSearch,
 }: MapDiscoveryClientProps) {
   const [center, setCenter] = useState<LatLng>(SUWON_DEFAULT_CENTER);
   const [zoomLevel, setZoomLevel] = useState<number>(DEFAULT_ZOOM_LEVEL);
@@ -83,9 +104,17 @@ export default function MapDiscoveryClient({
   const [directionsTarget, setDirectionsTarget] =
     useState<PublicRestroomSummary | null>(null);
 
-  // 지역/장소 검색 상태
+  // 지역/장소 + 휴지맵 화장실 이름 검색 상태
   const [searchResults, setSearchResults] = useState<PlaceSearchResult[]>([]);
+  const [restroomSearchResults, setRestroomSearchResults] = useState<
+    PublicRestroomSummary[]
+  >([]);
   const [searchStatus, setSearchStatus] = useState<PlaceSearchStatus>("idle");
+  const [searchPartialWarning, setSearchPartialWarning] = useState<
+    string | null
+  >(null);
+  const [pinnedSearchRestroom, setPinnedSearchRestroom] =
+    useState<PublicRestroomSummary | null>(null);
   const [searchAnchor, setSearchAnchor] = useState<{
     name: string;
     point: LatLng;
@@ -233,30 +262,63 @@ export default function MapDiscoveryClient({
     [fetchRestrooms, filterType]
   );
 
-  // 장소 검색 실행 (최신 요청만 반영)
+  // 장소 + 공개 화장실 이름 병렬 검색 실행 (최신 요청만 반영)
   const runPlaceSearch = useCallback(
     async (keyword: string) => {
       const trimmed = keyword.trim();
       const seq = ++searchSeqRef.current;
       if (!trimmed) {
         setSearchResults([]);
+        setRestroomSearchResults([]);
+        setSearchPartialWarning(null);
         setSearchStatus("idle");
         return;
       }
       setSearchStatus("loading");
-      try {
-        const results = await placeSearchFn(trimmed);
-        if (seq !== searchSeqRef.current) return; // 오래된 응답 무시
-        setSearchResults(results);
-        setSearchStatus(results.length > 0 ? "ok" : "empty");
-      } catch {
-        if (seq !== searchSeqRef.current) return;
+      setSearchPartialWarning(null);
+
+      const [placeRes, restroomRes] = await Promise.allSettled([
+        placeSearchFn(trimmed),
+        restroomSearchFn(trimmed),
+      ]);
+
+      if (seq !== searchSeqRef.current) return; // 오래된 응답 무시
+
+      const places = placeRes.status === "fulfilled" ? placeRes.value : [];
+      const restrooms =
+        restroomRes.status === "fulfilled" ? restroomRes.value : [];
+
+      const placeFailed = placeRes.status === "rejected";
+      const restroomFailed = restroomRes.status === "rejected";
+
+      if (
+        (placeFailed && restroomFailed) ||
+        (placeFailed && restrooms.length === 0) ||
+        (restroomFailed && places.length === 0)
+      ) {
         // 검색 실패 시에도 기존 지도·화장실 데이터는 건드리지 않는다
         setSearchResults([]);
+        setRestroomSearchResults([]);
+        setSearchPartialWarning(null);
         setSearchStatus("error");
+        return;
       }
+
+      if (placeFailed) {
+        setSearchPartialWarning(
+          "카카오 장소 검색에 일시적 오류가 있어 휴지맵 등록 화장실만 표시합니다."
+        );
+      } else if (restroomFailed) {
+        setSearchPartialWarning(
+          "휴지맵 화장실 검색에 일시적 오류가 있어 카카오 장소만 표시합니다."
+        );
+      }
+
+      setSearchResults(places);
+      setRestroomSearchResults(restrooms);
+      setSearchStatus(places.length + restrooms.length > 0 ? "ok" : "empty");
     },
-    [placeSearchFn]
+    [placeSearchFn, restroomSearchFn]
   );
 
   // 검색어 입력: 지도는 이동하지 않고 결과 목록만 갱신
@@ -270,6 +332,8 @@ export default function MapDiscoveryClient({
       }
       if (!keyword.trim()) {
         setSearchResults([]);
+        setRestroomSearchResults([]);
+        setSearchPartialWarning(null);
         setSearchStatus("idle");
         return;
       }
@@ -291,14 +355,17 @@ export default function MapDiscoveryClient({
     [runPlaceSearch]
   );
 
-  // 검색 결과 선택: 해당 좌표로 이동하고 주변 화장실 재조회
+  // 카카오 장소 검색 결과 선택: 해당 좌표로 이동 + 초록 마커 표시 + 주변 화장실 재조회
   const handleSelectPlace = useCallback(
     (place: PlaceSearchResult) => {
       searchSeqRef.current += 1;
       const point: LatLng = { lat: place.lat, lng: place.lng };
       setSearchKeyword(place.name);
       setSearchResults([]);
+      setRestroomSearchResults([]);
+      setSearchPartialWarning(null);
       setSearchStatus("idle");
+      setPinnedSearchRestroom(null);
       setSearchAnchor({ name: place.name, point });
       setAnchorMode("search");
       setSelectedRestroomId(null);
@@ -306,6 +373,41 @@ export default function MapDiscoveryClient({
       moveTo(point);
       if (isInServiceArea(point)) {
         fetchRestrooms(bboxAround(point), filterType);
+      }
+    },
+    [fetchRestrooms, filterType, moveTo]
+  );
+
+  // 휴지맵 등록 화장실 검색 결과 선택: 해당 화장실 위치로 이동 + 선택 + 주변 재조회
+  const handleSelectRestroomResult = useCallback(
+    (restroom: PublicRestroomSummary) => {
+      searchSeqRef.current += 1;
+      const point: LatLng = { lat: restroom.latitude, lng: restroom.longitude };
+      const nextFilterType: RestroomFilterType =
+        filterType !== "all" && restroom.type !== filterType
+          ? "all"
+          : filterType;
+
+      setSearchKeyword(restroom.name);
+      setSearchResults([]);
+      setRestroomSearchResults([]);
+      setSearchPartialWarning(null);
+      setSearchStatus("idle");
+      setSearchAnchor(null);
+      setAnchorMode("center");
+      if (nextFilterType !== filterType) {
+        setFilterType(nextFilterType);
+      }
+      setPinnedSearchRestroom(restroom);
+      setRawRestrooms((prev) =>
+        prev.some((r) => r.id === restroom.id) ? prev : [restroom, ...prev]
+      );
+      setSelectedRestroomId(restroom.id);
+      setIsSheetExpanded(false);
+      setZoomLevel(4);
+      moveTo(point);
+      if (isInServiceArea(point)) {
+        fetchRestrooms(bboxAround(point), nextFilterType);
       }
     },
     [fetchRestrooms, filterType, moveTo]
@@ -377,8 +479,13 @@ export default function MapDiscoveryClient({
   // 선택된 화장실 객체
   const selectedRestroom = useMemo(() => {
     if (!selectedRestroomId) return null;
-    return rawRestrooms.find((r) => r.id === selectedRestroomId) ?? null;
-  }, [rawRestrooms, selectedRestroomId]);
+    return (
+      rawRestrooms.find((r) => r.id === selectedRestroomId) ??
+      (pinnedSearchRestroom?.id === selectedRestroomId
+        ? pinnedSearchRestroom
+        : null)
+    );
+  }, [rawRestrooms, selectedRestroomId, pinnedSearchRestroom]);
 
   // 화장실 카드가 바텀시트에 노출될 때 restroom_card_viewed 기록
   useEffect(() => {
@@ -387,14 +494,8 @@ export default function MapDiscoveryClient({
         restroom: selectedRestroom,
         source: "marker_selection",
       });
-      if (selectedRestroom.type === "partner") {
-        trackPaymentUnavailableShown({
-          restroom: selectedRestroom,
-          reason: "feature_in_preparation",
-        });
-      }
     }
-  }, [selectedRestroom, trackCardViewed, trackPaymentUnavailableShown]);
+  }, [selectedRestroom, trackCardViewed]);
 
   // 마커 목록 생성
   const markers: MarkerOptions[] = useMemo(() => {
@@ -419,6 +520,17 @@ export default function MapDiscoveryClient({
         },
       }));
 
+    // 검색 선택한 장소 초록색 전용 마커 추가
+    if (searchAnchor) {
+      list.push({
+        id: "search_place_anchor",
+        position: searchAnchor.point,
+        title: searchAnchor.name,
+        type: "search_place",
+        zIndex: 20,
+      });
+    }
+
     // 현재 사용자 위치 마커 추가
     if (userLocation) {
       list.push({
@@ -431,7 +543,7 @@ export default function MapDiscoveryClient({
     }
 
     return list;
-  }, [filteredRestrooms, selectedRestroomId, userLocation, moveTo]);
+  }, [filteredRestrooms, selectedRestroomId, searchAnchor, userLocation, moveTo]);
 
   // 내 위치 조회 핸들러
   const handleCurrentLocationClick = useCallback(async () => {
@@ -472,6 +584,7 @@ export default function MapDiscoveryClient({
   };
 
   const handleResetCenter = () => {
+    setSearchAnchor(null);
     setAnchorMode(userLocation ? "user" : "center");
     moveTo(userLocation ?? SUWON_DEFAULT_CENTER);
   };
@@ -495,12 +608,15 @@ export default function MapDiscoveryClient({
           isLoading={isLoading}
         />
 
-        {/* 지역/장소 검색 결과 (선택 전에는 지도 이동 없음) */}
+        {/* 지역/장소 + 휴지맵 화장실 검색 결과 (선택 전에는 지도 이동 없음) */}
         <PlaceSearchResults
           status={searchStatus}
           results={searchResults}
+          restroomResults={restroomSearchResults}
+          partialWarning={searchPartialWarning}
           query={searchKeyword.trim()}
           onSelect={handleSelectPlace}
+          onSelectRestroom={handleSelectRestroomResult}
           onRetry={() => runPlaceSearch(searchKeyword)}
         />
 
@@ -615,13 +731,15 @@ export default function MapDiscoveryClient({
             source: "list_drawer",
           });
         }}
-        onCloseSelected={() => setSelectedRestroomId(null)}
+        onCloseSelected={() => {
+          setSelectedRestroomId(null);
+          setPinnedSearchRestroom(null);
+        }}
         onDirectionsClick={(restroom) => setDirectionsTarget(restroom)}
         onPaymentClick={(restroom) => {
-          trackPaymentButtonClicked({ restroom });
-          trackPaymentUnavailableShown({
+          trackPaymentButtonClicked({
             restroom,
-            reason: "feature_in_preparation",
+            depositAmountKrw: restroom.deposit_amount_krw ?? undefined,
           });
         }}
         onDetailClick={(restroom) => {

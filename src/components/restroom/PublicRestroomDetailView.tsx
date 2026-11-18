@@ -43,11 +43,17 @@ export default function PublicRestroomDetailView({
 }: PublicRestroomDetailViewProps) {
   const [showDirections, setShowDirections] = useState<boolean>(false);
   const isPartner = restroom.type === "partner";
+  const activePolicy = restroom.active_policy ?? null;
+  const policyMode = activePolicy?.access_mode ?? null;
+  const depositAmountKrw =
+    policyMode === "test_deposit" &&
+    typeof activePolicy?.deposit_amount_krw === "number" &&
+    activePolicy.deposit_amount_krw > 0
+      ? activePolicy.deposit_amount_krw
+      : null;
   const {
     trackDetailOpened,
     trackDirectionsClicked,
-    trackPaymentButtonClicked,
-    trackPaymentUnavailableShown,
   } = useEventTracker();
 
   useEffect(() => {
@@ -55,22 +61,7 @@ export default function PublicRestroomDetailView({
       restroom,
       sourceComponent: "direct_url",
     });
-
-    if (isPartner) {
-      trackPaymentUnavailableShown({
-        restroom,
-        reason: "feature_in_preparation",
-      });
-    }
-  }, [restroom, isPartner, trackDetailOpened, trackPaymentUnavailableShown]);
-
-  const handlePaymentClick = () => {
-    trackPaymentButtonClicked({ restroom });
-    trackPaymentUnavailableShown({
-      restroom,
-      reason: "feature_in_preparation",
-    });
-  };
+  }, [restroom, trackDetailOpened]);
 
   return (
     <div
@@ -132,7 +123,7 @@ export default function PublicRestroomDetailView({
           </p>
         )}
 
-        {/* 액션 버튼: 길찾기 & 제휴 결제 (공공은 결제 버튼 없음) */}
+        {/* 액션 버튼: 길찾기 */}
         <div className="mt-5 flex flex-col sm:flex-row items-center gap-2.5 pt-4 border-t border-slate-100 dark:border-slate-800">
           <button
             type="button"
@@ -143,24 +134,6 @@ export default function PublicRestroomDetailView({
             <span>🧭</span>
             <span>길찾기 (카카오·네이버·구글)</span>
           </button>
-
-          {isPartner && (
-            <div
-              onClick={handlePaymentClick}
-              className="w-full flex-1 cursor-pointer"
-            >
-              <button
-                type="button"
-                disabled
-                data-testid="detail-partner-payment-btn"
-                title="현재 결제 기능 준비 중입니다."
-                className="pointer-events-none flex min-h-[48px] w-full items-center justify-center gap-1.5 rounded-xl bg-purple-100 px-4 py-3 text-sm font-bold text-purple-700 opacity-80 cursor-not-allowed dark:bg-purple-950/60 dark:text-purple-300"
-              >
-                <span>💳</span>
-                <span>보증금 결제 (기능 준비 중)</span>
-              </button>
-            </div>
-          )}
         </div>
       </div>
 
@@ -171,33 +144,48 @@ export default function PublicRestroomDetailView({
         </h2>
 
         {isPartner ? (
-          <div className="space-y-3">
-            <div className="rounded-xl bg-purple-50 p-3.5 text-xs text-purple-900 dark:bg-purple-950/40 dark:text-purple-200 border border-purple-200/50 dark:border-purple-900/50">
-              <p className="font-bold text-sm mb-1">
-                ⚠️ 제휴 화장실 안심 보증금 제도
+          policyMode === "free" ? (
+            <div className="rounded-xl bg-emerald-50 p-3.5 text-xs text-emerald-950 dark:bg-emerald-950/40 dark:text-emerald-200 border border-emerald-200/60 dark:border-emerald-900/50">
+              <p className="font-bold text-sm mb-1">🤝 안심 제휴 무료 이용</p>
+              <p>
+                제휴 매장에서 보증금 없이 무료로 개방하는 화장실입니다.
               </p>
-              <ul className="list-disc pl-4 space-y-1 text-xs">
-                <li>
-                  <strong>테스트 보증금:</strong> 1,000원 (실제 결제 아님 /
-                  테스트 모드)
-                </li>
-                <li>
-                  <strong>영수증 환급:</strong> 이용 후 영수증 사진을 등록하면
-                  수동 심사를 거쳐 보증금이 환급됩니다.
-                </li>
-                <li>
-                  <strong>환급 신청 기한:</strong> 이용 시작 후 24시간 이내
-                </li>
-                <li>
-                  <strong>도어락 비밀번호:</strong> 결제 승인 완료 후에만 안전하게
-                  공개됩니다. (현재 화면에 노출되지 않음)
-                </li>
-              </ul>
-              <div className="mt-2.5 rounded bg-purple-200/60 dark:bg-purple-900/60 px-2 py-1 text-[11px] font-semibold text-purple-900 dark:text-purple-100">
-                ℹ️ 현재는 결제 시스템 준비 중으로 실제 결제는 차단되어 있습니다.
+            </div>
+          ) : policyMode === "test_deposit" && depositAmountKrw !== null ? (
+            <div className="space-y-3">
+              <div className="rounded-xl bg-purple-50 p-3.5 text-xs text-purple-900 dark:bg-purple-950/40 dark:text-purple-200 border border-purple-200/50 dark:border-purple-900/50">
+                <p className="font-bold text-sm mb-1">
+                  ⚠️ 제휴 화장실 안심 보증금 제도
+                </p>
+                <ul className="list-disc pl-4 space-y-1 text-xs">
+                  <li>
+                    <strong>테스트 보증금:</strong> {depositAmountKrw.toLocaleString()}원 (실제 결제 아님 / 테스트 모드)
+                  </li>
+                  <li>
+                    <strong>영수증 환급:</strong>{" "}
+                    {activePolicy?.refund_eligible
+                      ? "이용 후 영수증 사진을 등록하면 수동 심사를 거쳐 보증금이 환급됩니다."
+                      : "환급 미대상 정책입니다."}
+                  </li>
+                  {activePolicy?.refund_eligible && (
+                    <li>
+                      <strong>환급 신청 기한:</strong> 이용 시작 후{" "}
+                      {activePolicy.receipt_window_hours ?? 24}시간 이내
+                    </li>
+                  )}
+                  <li>
+                    <strong>도어락 비밀번호:</strong> 결제 승인 완료 후에만 안전하게
+                    공개됩니다. (현재 화면에 노출되지 않음)
+                  </li>
+                </ul>
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="rounded-xl bg-slate-50 p-3.5 text-xs text-slate-800 dark:bg-slate-800/60 dark:text-slate-200 border border-slate-200 dark:border-slate-700">
+              <p className="font-bold text-sm mb-1">📋 이용 정책 확인 필요</p>
+              <p>현재 활성화된 이용 정책 정보를 확인해 주세요.</p>
+            </div>
+          )
         ) : (
           <div className="rounded-xl bg-blue-50 p-3.5 text-xs text-blue-900 dark:bg-blue-950/40 dark:text-blue-200 border border-blue-200/50 dark:border-blue-900/50">
             <p className="font-bold text-sm mb-1">✨ 무료 공공 화장실</p>
@@ -276,12 +264,12 @@ export default function PublicRestroomDetailView({
       </div>
 
       {/* 운영 시간 정보 */}
-      {restroom.hours && restroom.hours.length > 0 && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <h2 className="text-sm font-bold text-slate-900 dark:text-white mb-3">
-            🕒 운영 시간
-          </h2>
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <h2 className="text-sm font-bold text-slate-900 dark:text-white mb-3">
+          🕒 운영 시간
+        </h2>
 
+        {restroom.hours && restroom.hours.length > 0 ? (
           <div className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
             {restroom.hours.map((h) => (
               <div
@@ -295,14 +283,20 @@ export default function PublicRestroomDetailView({
                   {h.is_closed
                     ? "휴무"
                     : h.opens_at && h.closes_at
-                    ? `${h.opens_at.slice(0, 5)} ~ ${h.closes_at.slice(0, 5)}`
-                    : "24시간 운영"}
+                    ? `${h.opens_at.slice(0, 5)} ~ ${
+                        h.crosses_midnight ? "익일 " : ""
+                      }${h.closes_at.slice(0, 5)}`
+                    : "운영시간 정보 없음"}
                 </span>
               </div>
             ))}
           </div>
-        </div>
-      )}
+        ) : (
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            운영시간 정보 없음
+          </p>
+        )}
+      </div>
 
       {/* 제휴 가게 정보 (제휴 화장실인 경우에만 노출) */}
       {isPartner && restroom.business && (

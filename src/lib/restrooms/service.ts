@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/db/types";
+import { createAdminClient, isServiceRoleConfigured } from "@/lib/supabase/server";
 import type {
   AccessMode,
   PublicBusinessInfo,
@@ -11,6 +12,20 @@ import type {
   PublicRestroomSummary,
 } from "./types";
 import { parseBBoxString } from "./validation";
+
+export const PARTNER_DISCOVERY_FLAG_KEY = "partner_restroom_discovery";
+
+export interface PublicCatalogQueryOptions {
+  /**
+   * Server-only elevated client (service_role) used strictly to verify
+   * `businesses.registration_status = 'approved'` and read allowlisted public business fields.
+   */
+  businessClient?: SupabaseClient<Database>;
+  /**
+   * Optional override for `partner_restroom_discovery` flag (for testing).
+   */
+  partnerDiscoveryEnabled?: boolean;
+}
 
 export interface ListPublicRestroomsParams {
   bbox: string;
@@ -26,22 +41,113 @@ export interface ListPublicRestroomsResult {
   offset: number;
 }
 
+export interface SearchPublicRestroomsParams {
+  q: string;
+  type: "all" | "public" | "partner";
+  limit: number;
+}
+
+export interface SearchPublicRestroomsResult {
+  items: PublicRestroomSummary[];
+  total: number;
+  limit: number;
+}
+
+const PUBLIC_RESTROOM_SUMMARY_COLUMNS =
+  "id, type, name, road_address, address_detail, latitude, longitude, access_method, gender_type, wheelchair_accessible, baby_changing_available, sanitary_products_available, last_verified_at, business_id";
+
+function resolveBusinessClient(
+  callerClient: SupabaseClient<Database>,
+  options?: PublicCatalogQueryOptions
+): SupabaseClient<Database> {
+  if (options?.businessClient) {
+    return options.businessClient;
+  }
+  if (isServiceRoleConfigured()) {
+    return createAdminClient();
+  }
+  return callerClient;
+}
+
+function hasValidCoordinates(lat: unknown, lng: unknown): lat is number {
+  return (
+    typeof lat === "number" &&
+    Number.isFinite(lat) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    typeof lng === "number" &&
+    Number.isFinite(lng) &&
+    lng >= -180 &&
+    lng <= 180
+  );
+}
+
+/**
+ * Check whether `partner_restroom_discovery` feature flag is enabled.
+ * Fails closed (returns false) when the flag row is missing or query fails.
+ * Public restrooms must NEVER be gated by this flag.
+ */
+export async function isPartnerRestroomDiscoveryEnabled(
+  supabase: SupabaseClient<Database>
+): Promise<boolean> {
+  try {
+    const { data, error } = await (supabase as any)
+      .from("feature_flags")
+      .select("enabled")
+      .eq("key", PARTNER_DISCOVERY_FLAG_KEY)
+      .maybeSingle();
+
+    if (error) {
+      console.error(
+        `[isPartnerRestroomDiscoveryEnabled] Failed to read feature flag:`,
+        error
+      );
+      return false;
+    }
+
+    return data?.enabled === true;
+  } catch (error) {
+    console.error(
+      `[isPartnerRestroomDiscoveryEnabled] Unexpected error reading feature flag:`,
+      error
+    );
+    return false;
+  }
+}
+
 /**
  * List publicly visible restrooms within a bounding box (for map search and catalog).
- * Excludes draft/pending restrooms, unlocated (null coords) restrooms, and restrooms of suspended businesses.
+ * Excludes draft/pending/suspended/archived restrooms, unlocated (null coords) restrooms,
+ * restrooms of non-approved businesses, and partner restrooms when `partner_restroom_discovery` is disabled.
  */
 export async function listPublicRestrooms(
   supabase: SupabaseClient<Database>,
-  params: ListPublicRestroomsParams
+  params: ListPublicRestroomsParams,
+  options?: PublicCatalogQueryOptions
 ): Promise<ListPublicRestroomsResult> {
   const { south, west, north, east } = parseBBoxString(params.bbox);
 
+  // Public restroom discovery is never affected by partner_restroom_discovery
+  let partnerDiscoveryEnabled = false;
+  if (params.type !== "public") {
+    partnerDiscoveryEnabled =
+      typeof options?.partnerDiscoveryEnabled === "boolean"
+        ? options.partnerDiscoveryEnabled
+        : await isPartnerRestroomDiscoveryEnabled(supabase);
+  }
+
+  if (params.type === "partner" && !partnerDiscoveryEnabled) {
+    return {
+      items: [],
+      total: 0,
+      limit: params.limit,
+      offset: params.offset,
+    };
+  }
+
   let query = (supabase as any)
     .from("restrooms")
-    .select(
-      "id, type, name, road_address, address_detail, latitude, longitude, access_method, gender_type, wheelchair_accessible, baby_changing_available, sanitary_products_available, last_verified_at, business_id",
-      { count: "exact" }
-    )
+    .select(PUBLIC_RESTROOM_SUMMARY_COLUMNS, { count: "exact" })
     .eq("publication_status", "published")
     .gte("latitude", south)
     .lte("latitude", north)
@@ -50,7 +156,7 @@ export async function listPublicRestrooms(
     .not("latitude", "is", null)
     .not("longitude", "is", null);
 
-  if (params.type === "public") {
+  if (params.type === "public" || (params.type === "all" && !partnerDiscoveryEnabled)) {
     query = query.eq("type", "public");
   } else if (params.type === "partner") {
     query = query.eq("type", "partner");
@@ -73,35 +179,84 @@ export async function listPublicRestrooms(
     };
   }
 
-  // Defense-in-depth: For partner restrooms, verify business is approved and fetch business name
-  const partnerBizIds = Array.from(
-    new Set(
-      rows
-        .filter((r: any) => r.type === "partner" && r.business_id)
-        .map((r: any) => r.business_id as string)
-    )
+  const items = await hydratePublicRestroomSummaries(
+    supabase,
+    rows,
+    partnerDiscoveryEnabled,
+    options
   );
+
+  return {
+    items,
+    total: items.length === rows.length ? (count ?? items.length) : items.length,
+    limit: params.limit,
+    offset: params.offset,
+  };
+}
+
+/**
+ * Verify approved partner businesses, filter out non-published or invalid-coord rows,
+ * and batch-hydrate active policies & primary approved photos.
+ */
+async function hydratePublicRestroomSummaries(
+  supabase: SupabaseClient<Database>,
+  rows: any[],
+  partnerDiscoveryEnabled: boolean,
+  options?: PublicCatalogQueryOptions
+): Promise<PublicRestroomSummary[]> {
+  // Defense-in-depth: Verify partner business is approved via server-only allowlist lookup
+  // (`businesses` table denies direct SELECT to anon and non-member authenticated callers)
+  const partnerBizIds = partnerDiscoveryEnabled
+    ? Array.from(
+        new Set(
+          rows
+            .filter((r: any) => r.type === "partner" && r.business_id)
+            .map((r: any) => r.business_id as string)
+        )
+      )
+    : [];
 
   const approvedBizMap = new Map<string, { id: string; name: string }>();
   if (partnerBizIds.length > 0) {
-    const { data: bizData } = await (supabase as any)
+    const bizClient = resolveBusinessClient(supabase, options);
+    const { data: bizData, error: bizError } = await (bizClient as any)
       .from("businesses")
       .select("id, name, registration_status")
       .in("id", partnerBizIds)
       .eq("registration_status", "approved");
 
-    if (bizData) {
+    if (bizError) {
+      console.error(
+        "[hydratePublicRestroomSummaries] Failed to verify partner businesses:",
+        bizError
+      );
+    } else if (bizData) {
       for (const b of bizData) {
-        approvedBizMap.set(b.id, { id: b.id, name: b.name });
+        if (b.registration_status === undefined || b.registration_status === "approved") {
+          approvedBizMap.set(b.id, { id: b.id, name: b.name });
+        }
       }
     }
   }
 
-  // Filter out partner restrooms whose business is NOT approved (suspended, draft, etc.)
+  // Filter out unpublished rows, invalid coordinates, and partner restrooms whose business is NOT approved
   const validRows = rows.filter((r: any) => {
+    if (
+      r.publication_status !== undefined &&
+      r.publication_status !== "published"
+    ) {
+      return false;
+    }
+    if (!hasValidCoordinates(r.latitude, r.longitude)) {
+      return false;
+    }
     if (r.type === "public") return true;
     if (r.type === "partner") {
-      return r.business_id && approvedBizMap.has(r.business_id);
+      return (
+        partnerDiscoveryEnabled &&
+        Boolean(r.business_id) &&
+        approvedBizMap.has(r.business_id)
+      );
     }
     return false;
   });
@@ -147,7 +302,7 @@ export async function listPublicRestrooms(
     }
   }
 
-  const items: PublicRestroomSummary[] = validRows.map((r: any) => {
+  return validRows.map((r: any) => {
     const policy = policyMap.get(r.id);
     const photoStoragePath = photoMap.get(r.id);
     const biz = r.business_id ? approvedBizMap.get(r.business_id) : undefined;
@@ -173,23 +328,89 @@ export async function listPublicRestrooms(
       primary_photo_storage_path: photoStoragePath ?? null,
     };
   });
+}
+
+/**
+ * Search publicly visible restrooms by name (for map search integration).
+ * Strictly excludes draft/pending/suspended/archived restrooms, restrooms without valid coords,
+ * partner restrooms of non-approved businesses, and partner restrooms when `partner_restroom_discovery` is disabled.
+ */
+export async function searchPublicRestroomsByName(
+  supabase: SupabaseClient<Database>,
+  params: SearchPublicRestroomsParams,
+  options?: PublicCatalogQueryOptions
+): Promise<SearchPublicRestroomsResult> {
+  const trimmed = params.q.trim();
+  if (!trimmed) {
+    return { items: [], total: 0, limit: params.limit };
+  }
+
+  let partnerDiscoveryEnabled = false;
+  if (params.type !== "public") {
+    partnerDiscoveryEnabled =
+      typeof options?.partnerDiscoveryEnabled === "boolean"
+        ? options.partnerDiscoveryEnabled
+        : await isPartnerRestroomDiscoveryEnabled(supabase);
+  }
+
+  if (params.type === "partner" && !partnerDiscoveryEnabled) {
+    return { items: [], total: 0, limit: params.limit };
+  }
+
+  const escapedQ = trimmed.replace(/[\\%_]/g, "\\$&");
+  const fetchLimit = Math.min(params.limit * 3, 60);
+
+  let query = (supabase as any)
+    .from("restrooms")
+    .select(PUBLIC_RESTROOM_SUMMARY_COLUMNS)
+    .eq("publication_status", "published")
+    .not("latitude", "is", null)
+    .not("longitude", "is", null)
+    .ilike("name", `%${escapedQ}%`);
+
+  if (params.type === "public" || (params.type === "all" && !partnerDiscoveryEnabled)) {
+    query = query.eq("type", "public");
+  } else if (params.type === "partner") {
+    query = query.eq("type", "partner");
+  }
+
+  const { data: rows, error } = await query
+    .order("name", { ascending: true })
+    .limit(fetchLimit);
+
+  if (error) {
+    throw error;
+  }
+
+  if (!rows || rows.length === 0) {
+    return { items: [], total: 0, limit: params.limit };
+  }
+
+  const hydrated = await hydratePublicRestroomSummaries(
+    supabase,
+    rows,
+    partnerDiscoveryEnabled,
+    options
+  );
+  const items = hydrated.slice(0, params.limit);
 
   return {
     items,
-    total: validRows.length === rows.length ? (count ?? items.length) : items.length,
+    total: items.length,
     limit: params.limit,
-    offset: params.offset,
   };
 }
 
 /**
  * Retrieve public details of a single restroom.
- * Returns null if the restroom is non-existent, unapproved, draft, or belongs to a suspended/unapproved business.
+ * Returns null if the restroom is non-existent, unapproved, draft, missing valid coordinates,
+ * belongs to a non-approved business, or is a partner restroom when `partner_restroom_discovery` is disabled.
  * NEVER leaks PIN, payment secret keys, or internal private notes.
  */
 export async function getPublicRestroomDetail(
   supabase: SupabaseClient<Database>,
-  id: string
+  id: string,
+  options?: PublicCatalogQueryOptions
 ): Promise<PublicRestroomDetail | null> {
   const { data: restroom, error } = await (supabase as any)
     .from("restrooms")
@@ -204,12 +425,34 @@ export async function getPublicRestroomDetail(
     return null;
   }
 
+  if (
+    restroom.publication_status !== undefined &&
+    restroom.publication_status !== "published"
+  ) {
+    return null;
+  }
+
+  if (!hasValidCoordinates(restroom.latitude, restroom.longitude)) {
+    return null;
+  }
+
   let publicBusiness: PublicBusinessInfo | null = null;
   if (restroom.type === "partner") {
+    const partnerDiscoveryEnabled =
+      typeof options?.partnerDiscoveryEnabled === "boolean"
+        ? options.partnerDiscoveryEnabled
+        : await isPartnerRestroomDiscoveryEnabled(supabase);
+
+    if (!partnerDiscoveryEnabled) {
+      return null;
+    }
+
     if (!restroom.business_id) {
       return null;
     }
-    const { data: biz } = await (supabase as any)
+
+    const bizClient = resolveBusinessClient(supabase, options);
+    const { data: biz, error: bizError } = await (bizClient as any)
       .from("businesses")
       .select(
         "id, name, category, description, road_address, jibun_address, address_detail, latitude, longitude, phone, website_url, registration_status"
@@ -218,7 +461,17 @@ export async function getPublicRestroomDetail(
       .eq("registration_status", "approved")
       .maybeSingle();
 
-    if (!biz) {
+    if (
+      bizError ||
+      !biz ||
+      (biz.registration_status !== undefined && biz.registration_status !== "approved")
+    ) {
+      if (bizError) {
+        console.error(
+          "[getPublicRestroomDetail] Failed to verify partner business:",
+          bizError
+        );
+      }
       // If partner business is not approved or suspended, restroom is strictly hidden
       return null;
     }
@@ -345,9 +598,11 @@ export async function getPublicRestroomDetail(
  */
 export async function getPublicBusinessDetail(
   supabase: SupabaseClient<Database>,
-  id: string
+  id: string,
+  options?: PublicCatalogQueryOptions
 ): Promise<PublicBusinessInfo | null> {
-  const { data: biz, error } = await (supabase as any)
+  const bizClient = resolveBusinessClient(supabase, options);
+  const { data: biz, error } = await (bizClient as any)
     .from("businesses")
     .select(
       "id, name, category, description, road_address, jibun_address, address_detail, latitude, longitude, phone, website_url, registration_status"
@@ -356,7 +611,17 @@ export async function getPublicBusinessDetail(
     .eq("registration_status", "approved")
     .maybeSingle();
 
-  if (error || !biz) {
+  if (
+    error ||
+    !biz ||
+    (biz.registration_status !== undefined && biz.registration_status !== "approved")
+  ) {
+    if (error) {
+      console.error(
+        "[getPublicBusinessDetail] Failed to query approved business:",
+        error
+      );
+    }
     return null;
   }
 

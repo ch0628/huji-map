@@ -86,7 +86,7 @@ describe("TASK 16: Map Discovery UI - Cards, Filters, BottomSheet, Directions & 
       ).toBeNull();
     });
 
-    it("안심 제휴 화장실의 보증금 및 준비 중 결제 버튼을 올바르게 렌더링한다", () => {
+    it("안심 제휴 화장실(test_deposit)의 DB 보증금 및 상세 결제 안내를 올바르게 렌더링한다", () => {
       render(<PublicRestroomCard restroom={mockPartnerRestroom} />);
 
       // 제휴 뱃지 확인
@@ -95,14 +95,70 @@ describe("TASK 16: Map Discovery UI - Cards, Filters, BottomSheet, Directions & 
       ).toContain("안심 제휴");
       expect(screen.getByText("행궁카페 화장실")).toBeDefined();
       expect(screen.getByText("1,000원")).toBeDefined();
+      expect(screen.queryByText(/결제 기능 준비 중/)).toBeNull();
 
-      // 제휴 전용 결제 버튼 확인 (비활성화 및 준비 중 표기)
-      const paymentBtn = screen.getByTestId(
-        `partner-payment-btn-${mockPartnerRestroom.id}`
+      // 상세 페이지에서 실제 테스트 결제 가능 안내 및 링크 확인
+      const detailLink = screen.getByTestId(
+        `detail-link-${mockPartnerRestroom.id}`
       );
-      expect(paymentBtn).toBeDefined();
-      expect((paymentBtn as HTMLButtonElement).disabled).toBe(true);
-      expect(paymentBtn.textContent).toContain("준비 중");
+      expect(detailLink.textContent).toContain("보증금 결제 · 상세");
+    });
+
+    it("무료 정책(free) 제휴 화장실은 무료로 표시하고 1,000원이나 결제 버튼을 노출하지 않는다", () => {
+      render(
+        <PublicRestroomCard
+          restroom={{
+            ...mockPartnerRestroom,
+            access_mode: "free",
+            deposit_amount_krw: 0,
+          }}
+        />
+      );
+
+      expect(screen.getByText("무료")).toBeDefined();
+      expect(screen.queryByText("1,000원")).toBeNull();
+      expect(screen.queryByText(/보증금 결제/)).toBeNull();
+    });
+
+    it("test_deposit 보증금 금액이 변경되면 변경된 DB 금액을 그대로 표시한다", () => {
+      render(
+        <PublicRestroomCard
+          restroom={{
+            ...mockPartnerRestroom,
+            access_mode: "test_deposit",
+            deposit_amount_krw: 2500,
+          }}
+        />
+      );
+
+      expect(screen.getByText("2,500원")).toBeDefined();
+      expect(screen.queryByText("1,000원")).toBeNull();
+    });
+
+    it("그 외 정책(real_deposit / 미설정)에서도 1,000원을 임의로 표시하지 않는다", () => {
+      const { rerender } = render(
+        <PublicRestroomCard
+          restroom={{
+            ...mockPartnerRestroom,
+            access_mode: "real_deposit",
+            deposit_amount_krw: 3000,
+          }}
+        />
+      );
+      expect(screen.getByText("결제 미지원")).toBeDefined();
+      expect(screen.queryByText("1,000원")).toBeNull();
+
+      rerender(
+        <PublicRestroomCard
+          restroom={{
+            ...mockPartnerRestroom,
+            access_mode: null,
+            deposit_amount_krw: null,
+          }}
+        />
+      );
+      expect(screen.getByText("정책 확인 필요")).toBeDefined();
+      expect(screen.queryByText("1,000원")).toBeNull();
     });
 
     it("편의시설(휠체어, 기저귀대 등)의 정보 상태(이용가능/미확인)를 구분하여 표시한다", () => {
@@ -336,6 +392,20 @@ describe("TASK 16: Map Discovery UI - Cards, Filters, BottomSheet, Directions & 
 
       // PIN 및 비밀번호 문구 미포함 검증
       expect(screen.queryByText(/PIN 번호: [0-9]+/)).toBeNull();
+    });
+
+    it("운영시간이 비어있으면 '운영시간 정보 없음'을 표시하고 임의로 '24시간 운영'을 표시하지 않는다", () => {
+      render(
+        <PublicRestroomDetailView
+          restroom={{
+            ...mockDetail,
+            hours: [],
+          }}
+        />
+      );
+
+      expect(screen.getByText("운영시간 정보 없음")).toBeDefined();
+      expect(screen.queryByText("24시간 운영")).toBeNull();
     });
   });
 

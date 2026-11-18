@@ -1,13 +1,16 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   catalogQuerySchema,
+  restroomSearchQuerySchema,
   listPublicRestrooms,
+  searchPublicRestroomsByName,
   getPublicRestroomDetail,
   getPublicBusinessDetail,
   type PublicRestroomSummary,
   type PublicRestroomDetail,
 } from "@/lib/restrooms";
 import { GET as restroomsGet } from "@/app/api/v1/restrooms/route";
+import { GET as restroomSearchGet } from "@/app/api/v1/restrooms/search/route";
 import { GET as restroomDetailGet } from "@/app/api/v1/restrooms/[id]/route";
 import { GET as publicBusinessGet } from "@/app/api/v1/businesses/[id]/route";
 import * as authLib from "@/lib/auth";
@@ -373,15 +376,54 @@ describe("TASK 10 — Catalog API Validation & Services", () => {
       },
     ];
 
+    beforeEach(() => {
+      vi.restoreAllMocks();
+      vi.spyOn(serverSupabase, "isServiceRoleConfigured").mockReturnValue(false);
+    });
+
     function createMockSupabase(overrides?: {
       restrooms?: typeof mockRestrooms;
       businesses?: typeof mockBusinesses;
+      partnerDiscoveryEnabled?: boolean | null;
+      featureFlagError?: { message: string } | null;
+      denyBusinesses?: boolean;
     }) {
       const currentRestrooms = overrides?.restrooms ?? mockRestrooms;
       const currentBusinesses = overrides?.businesses ?? mockBusinesses;
+      const flagEnabled =
+        overrides?.partnerDiscoveryEnabled === undefined
+          ? true
+          : overrides.partnerDiscoveryEnabled;
 
       return {
         from: vi.fn((table: string) => {
+          if (table === "feature_flags") {
+            let filterKey: string | null = null;
+            const chain: any = {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn((col: string, val: any) => {
+                if (col === "key") filterKey = val;
+                return chain;
+              }),
+              maybeSingle: vi.fn(() => {
+                if (overrides?.featureFlagError) {
+                  return Promise.resolve({
+                    data: null,
+                    error: overrides.featureFlagError,
+                  });
+                }
+                if (filterKey === "partner_restroom_discovery" && flagEnabled !== null) {
+                  return Promise.resolve({
+                    data: { key: "partner_restroom_discovery", enabled: flagEnabled },
+                    error: null,
+                  });
+                }
+                return Promise.resolve({ data: null, error: null });
+              }),
+            };
+            return chain;
+          }
+
           if (table === "restrooms") {
             let filterPubStatus: string | null = null;
             let filterGteLat: number | null = null;
@@ -449,6 +491,21 @@ describe("TASK 10 — Catalog API Validation & Services", () => {
           }
 
           if (table === "businesses") {
+            if (overrides?.denyBusinesses) {
+              const denyErr = {
+                code: "42501",
+                message: "permission denied for table businesses",
+              };
+              const chain: any = {
+                select: vi.fn().mockReturnThis(),
+                eq: vi.fn().mockReturnThis(),
+                in: vi.fn().mockReturnThis(),
+                maybeSingle: vi.fn().mockResolvedValue({ data: null, error: denyErr }),
+                then: (resolve: any) =>
+                  Promise.resolve({ data: null, error: denyErr }).then(resolve),
+              };
+              return chain;
+            }
             let filterId: string | null = null;
             let filterInIds: string[] | null = null;
             let filterStatus: string | null = null;
@@ -726,11 +783,22 @@ describe("TASK 10 — Catalog API Validation & Services", () => {
     beforeEach(() => {
       vi.restoreAllMocks();
       vi.spyOn(authLib, "isSupabaseAuthConfigured").mockReturnValue(true);
+      vi.spyOn(serverSupabase, "isServiceRoleConfigured").mockReturnValue(false);
     });
 
     it("3.1 GET /api/v1/restrooms returns 200 with catalog data on valid bbox", async () => {
       const mockClient = {
         from: vi.fn((table: string) => {
+          if (table === "feature_flags") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { key: "partner_restroom_discovery", enabled: false },
+                error: null,
+              }),
+            };
+          }
           if (table === "restrooms") {
             const chain: any = {
               select: vi.fn().mockReturnThis(),
@@ -895,6 +963,794 @@ describe("TASK 10 — Catalog API Validation & Services", () => {
       expect(resUnapproved.status).toBe(404);
       const jsonUnapproved = await resUnapproved.json();
       expect(jsonUnapproved.error.code).toBe("BUSINESS_NOT_FOUND");
+    });
+  });
+
+  describe("4. Partner Discovery Regression (RLS Separation & Feature Flag)", () => {
+    const approvedBizId = "06d803e0-bf16-473b-ac3e-4a917c24a77d";
+    const pendingBizId = "11111111-2222-4333-8444-555555555555";
+    const suspendedBizId = "22222222-3333-4444-8555-666666666666";
+
+    const partnerPublishedId = "5df3e8ce-597a-4c4f-bc5b-fa671301e8f8";
+    const partnerPendingId = "66666666-7777-4888-8999-aaaaaaaaaaaa";
+    const partnerArchivedId = "77777777-8888-4999-8aaa-bbbbbbbbbbbb";
+    const partnerSuspendedId = "88888888-9999-4aaa-8bbb-cccccccccccc";
+    const partnerPendingBizRestroomId = "99999999-aaaa-4bbb-8ccc-dddddddddddd";
+    const publicPublishedId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+    const allBusinesses = [
+      {
+        id: approvedBizId,
+        name: "DEMO/TEST 행궁 E2E 카페",
+        category: "카페",
+        description: "테스트 제휴 매장",
+        road_address: "경기도 수원시 팔달구 정조로 800 (DEMO/TEST)",
+        jibun_address: null,
+        address_detail: "1층",
+        latitude: 37.2835,
+        longitude: 127.0158,
+        phone: "031-000-0000",
+        website_url: null,
+        registration_status: "approved",
+        created_by: "secret-owner-uuid",
+        approved_by: "secret-admin-uuid",
+        registration_number: "123-45-67890",
+      },
+      {
+        id: pendingBizId,
+        name: "미승인 대기 가게",
+        category: "음식점",
+        description: null,
+        road_address: "수원시 팔달구 대기 1",
+        jibun_address: null,
+        address_detail: null,
+        latitude: 37.284,
+        longitude: 127.016,
+        phone: null,
+        website_url: null,
+        registration_status: "pending",
+      },
+      {
+        id: suspendedBizId,
+        name: "정지된 가게",
+        category: "음식점",
+        description: null,
+        road_address: "수원시 팔달구 정지 1",
+        jibun_address: null,
+        address_detail: null,
+        latitude: 37.2845,
+        longitude: 127.0165,
+        phone: null,
+        website_url: null,
+        registration_status: "suspended",
+      },
+    ];
+
+    const allRestrooms = [
+      {
+        id: publicPublishedId,
+        type: "public",
+        name: "수원 공중화장실",
+        description: "무료 개방",
+        road_address: "수원시 팔달구 정조로 100",
+        address_detail: null,
+        latitude: 37.285,
+        longitude: 127.015,
+        floor: "1층",
+        entrance_instructions: null,
+        gender_type: "separate",
+        wheelchair_accessible: true,
+        baby_changing_available: false,
+        sanitary_products_available: false,
+        access_method: "open",
+        publication_status: "published",
+        last_verified_at: "2026-11-10T00:00:00Z",
+        business_id: null,
+        created_at: "2026-11-10T00:00:00Z",
+        updated_at: "2026-11-10T00:00:00Z",
+      },
+      {
+        id: partnerPublishedId,
+        type: "partner",
+        name: "DEMO/TEST 행궁 제휴 화장실",
+        description: "보증금 1,000원 테스트 제휴",
+        road_address: "경기도 수원시 팔달구 정조로 800 (DEMO/TEST)",
+        address_detail: "1층",
+        latitude: 37.2835,
+        longitude: 127.0158,
+        floor: "1층",
+        entrance_instructions: "카운터 문의",
+        gender_type: "unisex",
+        wheelchair_accessible: false,
+        baby_changing_available: false,
+        sanitary_products_available: false,
+        access_method: "pin",
+        publication_status: "published",
+        last_verified_at: "2026-11-17T00:00:00Z",
+        business_id: approvedBizId,
+        created_at: "2026-11-17T00:00:00Z",
+        updated_at: "2026-11-17T00:00:00Z",
+      },
+      {
+        id: partnerPendingId,
+        type: "partner",
+        name: "심사대기 제휴 화장실",
+        description: null,
+        road_address: "수원시 팔달구 정조로 801",
+        address_detail: null,
+        latitude: 37.2836,
+        longitude: 127.0159,
+        floor: null,
+        entrance_instructions: null,
+        gender_type: "unknown",
+        wheelchair_accessible: null,
+        baby_changing_available: null,
+        sanitary_products_available: null,
+        access_method: "pin",
+        publication_status: "pending",
+        last_verified_at: null,
+        business_id: approvedBizId,
+        created_at: "2026-11-17T00:00:00Z",
+        updated_at: "2026-11-17T00:00:00Z",
+      },
+      {
+        id: partnerArchivedId,
+        type: "partner",
+        name: "보관됨 제휴 화장실",
+        description: null,
+        road_address: "수원시 팔달구 정조로 802",
+        address_detail: null,
+        latitude: 37.2837,
+        longitude: 127.016,
+        floor: null,
+        entrance_instructions: null,
+        gender_type: "unknown",
+        wheelchair_accessible: null,
+        baby_changing_available: null,
+        sanitary_products_available: null,
+        access_method: "pin",
+        publication_status: "archived",
+        last_verified_at: null,
+        business_id: approvedBizId,
+        created_at: "2026-11-17T00:00:00Z",
+        updated_at: "2026-11-17T00:00:00Z",
+      },
+      {
+        id: partnerSuspendedId,
+        type: "partner",
+        name: "중단됨 제휴 화장실",
+        description: null,
+        road_address: "수원시 팔달구 정조로 803",
+        address_detail: null,
+        latitude: 37.2838,
+        longitude: 127.0161,
+        floor: null,
+        entrance_instructions: null,
+        gender_type: "unknown",
+        wheelchair_accessible: null,
+        baby_changing_available: null,
+        sanitary_products_available: null,
+        access_method: "pin",
+        publication_status: "suspended",
+        last_verified_at: null,
+        business_id: approvedBizId,
+        created_at: "2026-11-17T00:00:00Z",
+        updated_at: "2026-11-17T00:00:00Z",
+      },
+      {
+        id: partnerPendingBizRestroomId,
+        type: "partner",
+        name: "미승인가게 화장실",
+        description: null,
+        road_address: "수원시 팔달구 대기 1",
+        address_detail: null,
+        latitude: 37.284,
+        longitude: 127.016,
+        floor: null,
+        entrance_instructions: null,
+        gender_type: "unknown",
+        wheelchair_accessible: null,
+        baby_changing_available: null,
+        sanitary_products_available: null,
+        access_method: "pin",
+        publication_status: "published",
+        last_verified_at: null,
+        business_id: pendingBizId,
+        created_at: "2026-11-17T00:00:00Z",
+        updated_at: "2026-11-17T00:00:00Z",
+      },
+    ];
+
+    function buildCallerAndAdminMocks(opts: {
+      flagEnabled: boolean | null;
+      flagError?: { message: string } | null;
+      callerBusinessBehavior: "42501" | "empty_rls";
+    }) {
+      const callerClient = {
+        from: vi.fn((table: string) => {
+          if (table === "feature_flags") {
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockImplementation(() => {
+                if (opts.flagError) {
+                  return Promise.resolve({ data: null, error: opts.flagError });
+                }
+                if (opts.flagEnabled === null) {
+                  return Promise.resolve({ data: null, error: null });
+                }
+                return Promise.resolve({
+                  data: { key: "partner_restroom_discovery", enabled: opts.flagEnabled },
+                  error: null,
+                });
+              }),
+            };
+          }
+          if (table === "restrooms") {
+            let filterPub: string | null = null;
+            let filterType: string | null = null;
+            let filterId: string | null = null;
+            let filterNameIlike: string | null = null;
+            let limitCount: number | null = null;
+            const applyRestroomFilters = () =>
+              allRestrooms.filter((r) => {
+                if (filterPub && r.publication_status !== filterPub) return false;
+                if (filterType && r.type !== filterType) return false;
+                if (filterNameIlike) {
+                  const needle = filterNameIlike.replace(/%/g, "").toLowerCase();
+                  if (!r.name.toLowerCase().includes(needle)) return false;
+                }
+                return true;
+              });
+            const chain: any = {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn((col: string, val: any) => {
+                if (col === "publication_status") filterPub = val;
+                if (col === "type") filterType = val;
+                if (col === "id") filterId = val;
+                return chain;
+              }),
+              gte: vi.fn().mockReturnThis(),
+              lte: vi.fn().mockReturnThis(),
+              not: vi.fn().mockReturnThis(),
+              ilike: vi.fn((_col: string, pattern: string) => {
+                filterNameIlike = pattern;
+                return chain;
+              }),
+              order: vi.fn().mockReturnThis(),
+              limit: vi.fn((n: number) => {
+                limitCount = n;
+                return chain;
+              }),
+              range: vi.fn((start: number, end: number) => {
+                const filtered = applyRestroomFilters();
+                return Promise.resolve({
+                  data: filtered.slice(start, end + 1),
+                  count: filtered.length,
+                  error: null,
+                });
+              }),
+              maybeSingle: vi.fn(() => {
+                const found = allRestrooms.find((r) => {
+                  if (filterId && r.id !== filterId) return false;
+                  if (filterPub && r.publication_status !== filterPub) return false;
+                  return true;
+                });
+                return Promise.resolve({ data: found ?? null, error: null });
+              }),
+              then: (resolve: any) => {
+                const filtered = applyRestroomFilters();
+                const sliced =
+                  limitCount !== null ? filtered.slice(0, limitCount) : filtered;
+                return Promise.resolve({ data: sliced, error: null }).then(resolve);
+              },
+            };
+            return chain;
+          }
+          if (table === "businesses") {
+            if (opts.callerBusinessBehavior === "42501") {
+              const err = { code: "42501", message: "permission denied for table businesses" };
+              return {
+                select: vi.fn().mockReturnThis(),
+                eq: vi.fn().mockReturnThis(),
+                in: vi.fn().mockReturnThis(),
+                maybeSingle: vi.fn().mockResolvedValue({ data: null, error: err }),
+                then: (resolve: any) => Promise.resolve({ data: null, error: err }).then(resolve),
+              };
+            }
+            return {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              in: vi.fn().mockReturnThis(),
+              maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+              then: (resolve: any) => Promise.resolve({ data: [], error: null }).then(resolve),
+            };
+          }
+          if (table === "restroom_access_policies") {
+            let filterId: string | null = null;
+            let filterIn: string[] | null = null;
+            const policies = [
+              {
+                id: "pol-partner-1",
+                restroom_id: partnerPublishedId,
+                version: 2,
+                access_mode: "test_deposit",
+                deposit_amount_krw: 1000,
+                refund_eligible: true,
+                receipt_window_hours: 24,
+                min_purchase_krw: 0,
+                is_active: true,
+                effective_from: "2026-11-17T00:00:00Z",
+              },
+            ];
+            const chain: any = {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn((col: string, val: any) => {
+                if (col === "restroom_id") filterId = val;
+                return chain;
+              }),
+              in: vi.fn((col: string, vals: string[]) => {
+                if (col === "restroom_id") filterIn = vals;
+                return chain;
+              }),
+              maybeSingle: vi.fn(() => {
+                const found = policies.find((p) => !filterId || p.restroom_id === filterId);
+                return Promise.resolve({ data: found ?? null, error: null });
+              }),
+              then: (resolve: any) => {
+                const found = policies.filter((p) => !filterIn || filterIn.includes(p.restroom_id));
+                return Promise.resolve({ data: found, error: null }).then(resolve);
+              },
+            };
+            return chain;
+          }
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            in: vi.fn().mockReturnThis(),
+            order: vi.fn().mockReturnThis(),
+            then: (resolve: any) => Promise.resolve({ data: [], error: null }).then(resolve),
+          };
+        }),
+      };
+
+      const adminClient = {
+        from: vi.fn((table: string) => {
+          if (table !== "businesses") {
+            throw new Error(`adminClient should only query businesses, got ${table}`);
+          }
+          let filterId: string | null = null;
+          let filterInIds: string[] | null = null;
+          let filterStatus: string | null = null;
+          const chain: any = {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn((col: string, val: any) => {
+              if (col === "id") filterId = val;
+              if (col === "registration_status") filterStatus = val;
+              return chain;
+            }),
+            in: vi.fn((col: string, vals: string[]) => {
+              if (col === "id") filterInIds = vals;
+              return chain;
+            }),
+            maybeSingle: vi.fn(() => {
+              const found = allBusinesses.find((b) => {
+                if (filterId && b.id !== filterId) return false;
+                if (filterStatus && b.registration_status !== filterStatus) return false;
+                return true;
+              });
+              return Promise.resolve({ data: found ?? null, error: null });
+            }),
+            then: (resolve: any) => {
+              const filtered = allBusinesses.filter((b) => {
+                if (filterInIds && !filterInIds.includes(b.id)) return false;
+                if (filterStatus && b.registration_status !== filterStatus) return false;
+                return true;
+              });
+              return Promise.resolve({ data: filtered, error: null }).then(resolve);
+            },
+          };
+          return chain;
+        }),
+      };
+
+      return { callerClient, adminClient };
+    }
+
+    beforeEach(() => {
+      vi.restoreAllMocks();
+      vi.spyOn(authLib, "isSupabaseAuthConfigured").mockReturnValue(true);
+    });
+
+    it("4.1 Guest (anon 42501 on businesses) and Customer (RLS empty on businesses) both receive approved partner restrooms via server-only adminClient when flag is enabled", async () => {
+      for (const behavior of ["42501", "empty_rls"] as const) {
+        const { callerClient, adminClient } = buildCallerAndAdminMocks({
+          flagEnabled: true,
+          callerBusinessBehavior: behavior,
+        });
+        vi.spyOn(serverSupabase, "isServiceRoleConfigured").mockReturnValue(true);
+        vi.spyOn(serverSupabase, "createAdminClient").mockReturnValue(adminClient as any);
+        vi.spyOn(serverSupabase, "createServerClientInstance").mockResolvedValue(
+          callerClient as any
+        );
+
+        // List API (type=partner)
+        const listRes = await restroomsGet(
+          new Request(
+            `http://localhost/api/v1/restrooms?bbox=${encodeURIComponent(sampleBBox)}&type=partner`
+          )
+        );
+        expect(listRes.status).toBe(200);
+        const listJson = await listRes.json();
+        expect(listJson.data.items).toHaveLength(1);
+        expect(listJson.data.items[0].id).toBe(partnerPublishedId);
+        expect(listJson.data.items[0].business_name).toBe("DEMO/TEST 행궁 E2E 카페");
+        expect(listJson.data.items[0].access_mode).toBe("test_deposit");
+        expect(listJson.data.items[0].deposit_amount_krw).toBe(1000);
+
+        // Detail API
+        const detailRes = await restroomDetailGet(
+          new Request(`http://localhost/api/v1/restrooms/${partnerPublishedId}`),
+          { params: Promise.resolve({ id: partnerPublishedId }) }
+        );
+        expect(detailRes.status).toBe(200);
+        const detailJson = await detailRes.json();
+        expect(detailJson.data.id).toBe(partnerPublishedId);
+        expect(detailJson.data.business.name).toBe("DEMO/TEST 행궁 E2E 카페");
+        expect(detailJson.data.business.registration_number).toBeUndefined();
+        expect(detailJson.data.business.created_by).toBeUndefined();
+        expect(detailJson.data.business.approved_by).toBeUndefined();
+        expect(detailJson.data.active_policy.access_mode).toBe("test_deposit");
+        expect(detailJson.data.active_policy.deposit_amount_krw).toBe(1000);
+
+        // Public business API
+        const bizRes = await publicBusinessGet(
+          new Request(`http://localhost/api/v1/businesses/${approvedBizId}`),
+          { params: Promise.resolve({ id: approvedBizId }) }
+        );
+        expect(bizRes.status).toBe(200);
+        const bizJson = await bizRes.json();
+        expect(bizJson.data.name).toBe("DEMO/TEST 행궁 E2E 카페");
+        expect(bizJson.data.registration_number).toBeUndefined();
+      }
+    });
+
+    it("4.2 Hides draft, pending, suspended, archived restrooms and restrooms of non-approved businesses", async () => {
+      const { callerClient, adminClient } = buildCallerAndAdminMocks({
+        flagEnabled: true,
+        callerBusinessBehavior: "42501",
+      });
+      vi.spyOn(serverSupabase, "isServiceRoleConfigured").mockReturnValue(true);
+      vi.spyOn(serverSupabase, "createAdminClient").mockReturnValue(adminClient as any);
+      vi.spyOn(serverSupabase, "createServerClientInstance").mockResolvedValue(
+        callerClient as any
+      );
+
+      // List excludes non-published and unapproved-business restrooms
+      const listRes = await restroomsGet(
+        new Request(
+          `http://localhost/api/v1/restrooms?bbox=${encodeURIComponent(sampleBBox)}&type=all`
+        )
+      );
+      const listJson = await listRes.json();
+      const ids = listJson.data.items.map((x: any) => x.id);
+      expect(ids).toEqual(expect.arrayContaining([publicPublishedId, partnerPublishedId]));
+      expect(ids).not.toContain(partnerPendingId);
+      expect(ids).not.toContain(partnerArchivedId);
+      expect(ids).not.toContain(partnerSuspendedId);
+      expect(ids).not.toContain(partnerPendingBizRestroomId);
+
+      // Detail returns 404 for every non-public state
+      for (const hiddenId of [
+        partnerPendingId,
+        partnerArchivedId,
+        partnerSuspendedId,
+        partnerPendingBizRestroomId,
+      ]) {
+        const res = await restroomDetailGet(
+          new Request(`http://localhost/api/v1/restrooms/${hiddenId}`),
+          { params: Promise.resolve({ id: hiddenId }) }
+        );
+        expect(res.status).toBe(404);
+      }
+
+      // Non-approved business detail returns 404
+      for (const hiddenBizId of [pendingBizId, suspendedBizId]) {
+        const res = await publicBusinessGet(
+          new Request(`http://localhost/api/v1/businesses/${hiddenBizId}`),
+          { params: Promise.resolve({ id: hiddenBizId }) }
+        );
+        expect(res.status).toBe(404);
+      }
+    });
+
+    it("4.3 Feature flag false/error/missing hides partner restrooms while keeping public restrooms unaffected", async () => {
+      for (const scenario of [
+        { flagEnabled: false, flagError: null },
+        { flagEnabled: null, flagError: null },
+        { flagEnabled: null, flagError: { message: "DB error" } },
+      ]) {
+        const { callerClient, adminClient } = buildCallerAndAdminMocks({
+          flagEnabled: scenario.flagEnabled,
+          flagError: scenario.flagError,
+          callerBusinessBehavior: "42501",
+        });
+        vi.spyOn(serverSupabase, "isServiceRoleConfigured").mockReturnValue(true);
+        vi.spyOn(serverSupabase, "createAdminClient").mockReturnValue(adminClient as any);
+        vi.spyOn(serverSupabase, "createServerClientInstance").mockResolvedValue(
+          callerClient as any
+        );
+
+        // type=partner returns empty
+        const partnerRes = await restroomsGet(
+          new Request(
+            `http://localhost/api/v1/restrooms?bbox=${encodeURIComponent(sampleBBox)}&type=partner`
+          )
+        );
+        expect(partnerRes.status).toBe(200);
+        const partnerJson = await partnerRes.json();
+        expect(partnerJson.data.items).toEqual([]);
+        expect(partnerJson.data.total).toBe(0);
+
+        // type=all returns ONLY public restrooms
+        const allRes = await restroomsGet(
+          new Request(
+            `http://localhost/api/v1/restrooms?bbox=${encodeURIComponent(sampleBBox)}&type=all`
+          )
+        );
+        expect(allRes.status).toBe(200);
+        const allJson = await allRes.json();
+        expect(allJson.data.items.map((x: any) => x.id)).toEqual([publicPublishedId]);
+
+        // type=public returns public restrooms unaffected
+        const publicRes = await restroomsGet(
+          new Request(
+            `http://localhost/api/v1/restrooms?bbox=${encodeURIComponent(sampleBBox)}&type=public`
+          )
+        );
+        expect(publicRes.status).toBe(200);
+        const publicJson = await publicRes.json();
+        expect(publicJson.data.items.map((x: any) => x.id)).toEqual([publicPublishedId]);
+
+        // Partner detail returns 404 when disabled, public detail still returns 200
+        const partnerDetailRes = await restroomDetailGet(
+          new Request(`http://localhost/api/v1/restrooms/${partnerPublishedId}`),
+          { params: Promise.resolve({ id: partnerPublishedId }) }
+        );
+        expect(partnerDetailRes.status).toBe(404);
+
+        const publicDetailRes = await restroomDetailGet(
+          new Request(`http://localhost/api/v1/restrooms/${publicPublishedId}`),
+          { params: Promise.resolve({ id: publicPublishedId }) }
+        );
+        expect(publicDetailRes.status).toBe(200);
+      }
+    });
+  });
+
+  describe("5. Public Restroom Name Search (GET /api/v1/restrooms/search)", () => {
+    it("5.1 validates search query schema and rejects blank queries", () => {
+      expect(restroomSearchQuerySchema.safeParse({ q: "   " }).success).toBe(false);
+      expect(restroomSearchQuerySchema.safeParse({}).success).toBe(false);
+
+      const valid = restroomSearchQuerySchema.safeParse({ q: " 수원 ", limit: "5" });
+      expect(valid.success).toBe(true);
+      if (valid.success) {
+        expect(valid.data.q).toBe("수원");
+        expect(valid.data.type).toBe("all");
+        expect(valid.data.limit).toBe(5);
+      }
+    });
+
+    it("5.2 returns only published public & approved-business partner restrooms matching name, excluding draft/suspended/unapproved-business", async () => {
+      vi.restoreAllMocks();
+      vi.spyOn(authLib, "isSupabaseAuthConfigured").mockReturnValue(true);
+
+      const approvedBizId = "b1000000-0000-4000-8000-000000000001";
+      const pendingBizId = "b2000000-0000-4000-8000-000000000002";
+      const rows = [
+        {
+          id: "r1000000-0000-4000-8000-000000000001",
+          type: "public",
+          name: "수원 화성 공중화장실",
+          road_address: "수원시 팔달구 정조로 1",
+          address_detail: null,
+          latitude: 37.285,
+          longitude: 127.015,
+          access_method: "open",
+          gender_type: "separate",
+          wheelchair_accessible: true,
+          baby_changing_available: false,
+          sanitary_products_available: false,
+          publication_status: "published",
+          last_verified_at: null,
+          business_id: null,
+        },
+        {
+          id: "r2000000-0000-4000-8000-000000000002",
+          type: "partner",
+          name: "수원 제휴카페 화장실",
+          road_address: "수원시 팔달구 매산로 10",
+          address_detail: "1층",
+          latitude: 37.266,
+          longitude: 127.001,
+          access_method: "pin",
+          gender_type: "unisex",
+          wheelchair_accessible: null,
+          baby_changing_available: null,
+          sanitary_products_available: null,
+          publication_status: "published",
+          last_verified_at: null,
+          business_id: approvedBizId,
+        },
+        {
+          id: "r3000000-0000-4000-8000-000000000003",
+          type: "partner",
+          name: "수원 미승인가게 화장실",
+          road_address: "수원시 팔달구 매산로 20",
+          address_detail: null,
+          latitude: 37.267,
+          longitude: 127.002,
+          access_method: "pin",
+          gender_type: "unisex",
+          wheelchair_accessible: null,
+          baby_changing_available: null,
+          sanitary_products_available: null,
+          publication_status: "published",
+          last_verified_at: null,
+          business_id: pendingBizId,
+        },
+        {
+          id: "r4000000-0000-4000-8000-000000000004",
+          type: "partner",
+          name: "수원 비공개 임시 화장실",
+          road_address: "수원시 팔달구 매산로 30",
+          address_detail: null,
+          latitude: 37.268,
+          longitude: 127.003,
+          access_method: "ask_staff",
+          gender_type: "unknown",
+          wheelchair_accessible: null,
+          baby_changing_available: null,
+          sanitary_products_available: null,
+          publication_status: "draft",
+          last_verified_at: null,
+          business_id: approvedBizId,
+        },
+      ];
+
+      const makeSearchMocks = (flagEnabled: boolean) => {
+        const callerClient: any = {
+          from: vi.fn((table: string) => {
+            if (table === "feature_flags") {
+              return {
+                select: vi.fn().mockReturnThis(),
+                eq: vi.fn().mockReturnThis(),
+                maybeSingle: vi.fn().mockResolvedValue({
+                  data: { key: "partner_restroom_discovery", enabled: flagEnabled },
+                  error: null,
+                }),
+              };
+            }
+            if (table === "restrooms") {
+              let pubFilter: string | null = null;
+              let typeFilter: string | null = null;
+              let ilikePat: string | null = null;
+              const chain: any = {
+                select: vi.fn().mockReturnThis(),
+                eq: vi.fn((col: string, val: string) => {
+                  if (col === "publication_status") pubFilter = val;
+                  if (col === "type") typeFilter = val;
+                  return chain;
+                }),
+                not: vi.fn().mockReturnThis(),
+                ilike: vi.fn((_col: string, pat: string) => {
+                  ilikePat = pat;
+                  return chain;
+                }),
+                order: vi.fn().mockReturnThis(),
+                limit: vi.fn(() => {
+                  const needle = (ilikePat ?? "").replace(/%/g, "").toLowerCase();
+                  const data = rows.filter((r) => {
+                    if (pubFilter && r.publication_status !== pubFilter) return false;
+                    if (typeFilter && r.type !== typeFilter) return false;
+                    if (needle && !r.name.toLowerCase().includes(needle)) return false;
+                    return true;
+                  });
+                  return Promise.resolve({ data, error: null });
+                }),
+              };
+              return chain;
+            }
+            return {
+              select: vi.fn().mockReturnThis(),
+              in: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              then: (resolve: any) => Promise.resolve({ data: [], error: null }).then(resolve),
+            };
+          }),
+        };
+
+        const adminClient: any = {
+          from: vi.fn((table: string) => {
+            if (table !== "businesses") throw new Error("unexpected table");
+            return {
+              select: vi.fn().mockReturnThis(),
+              in: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              then: (resolve: any) =>
+                Promise.resolve({
+                  data: [
+                    {
+                      id: approvedBizId,
+                      name: "DEMO 승인카페",
+                      registration_status: "approved",
+                    },
+                  ],
+                  error: null,
+                }).then(resolve),
+            };
+          }),
+        };
+        return { callerClient, adminClient };
+      };
+
+      // 1) partner_restroom_discovery = true
+      {
+        const { callerClient, adminClient } = makeSearchMocks(true);
+        vi.spyOn(serverSupabase, "isServiceRoleConfigured").mockReturnValue(true);
+        vi.spyOn(serverSupabase, "createAdminClient").mockReturnValue(adminClient);
+        vi.spyOn(serverSupabase, "createServerClientInstance").mockResolvedValue(callerClient);
+
+        const res = await restroomSearchGet(
+          new Request("http://localhost/api/v1/restrooms/search?q=%EC%88%98%EC%9B%90")
+        );
+        expect(res.status).toBe(200);
+        const json = await res.json();
+        expect(json.data.items.map((x: any) => x.id)).toEqual([
+          "r1000000-0000-4000-8000-000000000001",
+          "r2000000-0000-4000-8000-000000000002",
+        ]);
+        expect(json.data.items[1].business_name).toBe("DEMO 승인카페");
+        // No PIN / internal fields leaked
+        expect(json.data.items[1].pin).toBeUndefined();
+      }
+
+      // 2) partner_restroom_discovery = false -> only public returned
+      {
+        const { callerClient, adminClient } = makeSearchMocks(false);
+        vi.spyOn(serverSupabase, "isServiceRoleConfigured").mockReturnValue(true);
+        vi.spyOn(serverSupabase, "createAdminClient").mockReturnValue(adminClient);
+        vi.spyOn(serverSupabase, "createServerClientInstance").mockResolvedValue(callerClient);
+
+        const res = await restroomSearchGet(
+          new Request("http://localhost/api/v1/restrooms/search?q=%EC%88%98%EC%9B%90")
+        );
+        expect(res.status).toBe(200);
+        const json = await res.json();
+        expect(json.data.items.map((x: any) => x.id)).toEqual([
+          "r1000000-0000-4000-8000-000000000001",
+        ]);
+      }
+
+      // 3) 400 on missing q
+      {
+        const badRes = await restroomSearchGet(
+          new Request("http://localhost/api/v1/restrooms/search?q=")
+        );
+        expect(badRes.status).toBe(400);
+      }
+
+      // 4) direct service call escapes LIKE wildcards safely
+      {
+        const { callerClient, adminClient } = makeSearchMocks(true);
+        const result = await searchPublicRestroomsByName(
+          callerClient,
+          { q: "100%_test", type: "all", limit: 10 },
+          { businessClient: adminClient, partnerDiscoveryEnabled: true }
+        );
+        expect(result.items).toEqual([]);
+      }
     });
   });
 });

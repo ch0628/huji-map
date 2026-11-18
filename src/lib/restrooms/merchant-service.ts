@@ -1,8 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { createAdminClient, isServiceRoleConfigured } from "@/lib/supabase/server";
 import {
   type CreateMerchantRestroomInput,
   type UpdateMerchantRestroomInput,
   type CreateMerchantPolicyInput,
+  type RestroomHourInput,
+  normalizeRestroomHours,
   resolvePolicyAccessMode,
 } from "./merchant-validation";
 
@@ -120,9 +123,77 @@ export async function listMerchantRestrooms(
   return restrooms ?? [];
 }
 
+export interface MerchantRestroomPinStatus {
+  hasActivePin: boolean;
+  codeVersion: number | null;
+  updatedAt: string | null;
+  encryptionConfigured: boolean;
+}
+
+function isPinEncryptionKeyConfigured(): boolean {
+  const raw =
+    process.env.PIN_ENCRYPTION_KEY ?? process.env.PIN_ENCRYPTION_KEY_BASE64;
+  return typeof raw === "string" && raw.trim().length > 0;
+}
+
 /**
- * Gets partner restroom details for merchant (including policies and hours).
- * Strictly excludes encrypted_pin or secret fields.
+ * Replaces all weekly operating hours for a partner restroom.
+ * Relies on RLS `restroom_hours_mutation_policy` (`can_edit_restroom`).
+ */
+export async function replaceMerchantRestroomHours(
+  supabase: SupabaseClient<any>,
+  restroomId: string,
+  hours: readonly RestroomHourInput[]
+) {
+  const normalized = normalizeRestroomHours(hours);
+
+  const { error: deleteError } = await supabase
+    .from("restroom_hours")
+    .delete()
+    .eq("restroom_id", restroomId);
+
+  if (deleteError) {
+    throw new MerchantRestroomError(
+      "HOURS_UPDATE_FAILED",
+      `운영시간 초기화 실패: ${deleteError.message}`,
+      500
+    );
+  }
+
+  if (normalized.length === 0) {
+    return [];
+  }
+
+  const rowsToInsert = normalized.map((h) => ({
+    restroom_id: restroomId,
+    weekday: h.weekday,
+    opens_at: h.opens_at,
+    closes_at: h.closes_at,
+    is_closed: h.is_closed,
+    crosses_midnight: h.crosses_midnight,
+  }));
+
+  const { data: inserted, error: insertError } = await supabase
+    .from("restroom_hours")
+    .insert(rowsToInsert)
+    .select("id, weekday, opens_at, closes_at, is_closed, crosses_midnight")
+    .order("weekday", { ascending: true })
+    .order("opens_at", { ascending: true });
+
+  if (insertError) {
+    throw new MerchantRestroomError(
+      "HOURS_UPDATE_FAILED",
+      `운영시간 저장 실패: ${insertError.message}`,
+      500
+    );
+  }
+
+  return inserted ?? [];
+}
+
+/**
+ * Gets partner restroom details for merchant (including policies, hours, and safe PIN metadata).
+ * Strictly excludes encrypted_pin, ciphertext, IV, auth_tag, or plaintext PIN.
  */
 export async function getMerchantRestroomDetail(
   supabase: SupabaseClient<any>,
@@ -136,7 +207,8 @@ export async function getMerchantRestroomDetail(
     .from("restroom_hours")
     .select("id, weekday, opens_at, closes_at, is_closed, crosses_midnight")
     .eq("restroom_id", restroomId)
-    .order("weekday");
+    .order("weekday", { ascending: true })
+    .order("opens_at", { ascending: true });
 
   // Load policies
   const { data: policies } = await supabase
@@ -152,12 +224,44 @@ export async function getMerchantRestroomDetail(
     .eq("restroom_id", restroomId)
     .order("created_at", { ascending: false });
 
+  // Load safe PIN registration metadata (NEVER ciphertext/IV/tag/HMAC/plaintext)
+  let pinStatus: MerchantRestroomPinStatus = {
+    hasActivePin: false,
+    codeVersion: null,
+    updatedAt: null,
+    encryptionConfigured: isPinEncryptionKeyConfigured(),
+  };
+
+  if (isServiceRoleConfigured()) {
+    try {
+      const adminClient = createAdminClient() as any;
+      const { data: activeSecret } = await adminClient
+        .from("restroom_lock_secrets")
+        .select("code_version, valid_from")
+        .eq("restroom_id", restroomId)
+        .eq("status", "active")
+        .maybeSingle();
+
+      if (activeSecret) {
+        pinStatus = {
+          ...pinStatus,
+          hasActivePin: true,
+          codeVersion: activeSecret.code_version ?? null,
+          updatedAt: activeSecret.valid_from ?? null,
+        };
+      }
+    } catch {
+      // Fail safe: keep default pinStatus without breaking detail view
+    }
+  }
+
   return {
     ...restroom,
     businessId,
     hours: hours ?? [],
     policies: policies ?? [],
     photos: photos ?? [],
+    pinStatus,
   };
 }
 
@@ -201,6 +305,14 @@ export async function createMerchantRestroom(
       }
     );
     if (!rpcError && rpcRestroom) {
+      if (input.hours && input.hours.length > 0 && rpcRestroom.id) {
+        const savedHours = await replaceMerchantRestroomHours(
+          supabase,
+          rpcRestroom.id,
+          input.hours
+        );
+        return { ...rpcRestroom, hours: savedHours };
+      }
       return rpcRestroom;
     }
     if (rpcError) {
@@ -264,6 +376,15 @@ export async function createMerchantRestroom(
     created_by: userId,
   });
 
+  if (input.hours && input.hours.length > 0) {
+    const savedHours = await replaceMerchantRestroomHours(
+      supabase,
+      inserted.id,
+      input.hours
+    );
+    return { ...inserted, hours: savedHours };
+  }
+
   return inserted;
 }
 
@@ -309,22 +430,35 @@ export async function updateMerchantRestroom(
   if (input.sanitary_products_available !== undefined) patch.sanitary_products_available = input.sanitary_products_available;
   if (input.access_method !== undefined) patch.access_method = input.access_method;
 
-  if (Object.keys(patch).length === 0) {
+  if (Object.keys(patch).length === 0 && input.hours === undefined) {
     return restroom;
   }
 
-  const { data: updated, error } = await supabase
-    .from("restrooms")
-    .update(patch)
-    .eq("id", restroomId)
-    .select("id, business_id, type, name, description, road_address, address_detail, latitude, longitude, floor, entrance_instructions, gender_type, wheelchair_accessible, baby_changing_available, sanitary_products_available, access_method, publication_status, created_at, updated_at")
-    .single();
+  let updatedRestroom = restroom;
+  if (Object.keys(patch).length > 0) {
+    const { data: updated, error } = await supabase
+      .from("restrooms")
+      .update(patch)
+      .eq("id", restroomId)
+      .select("id, business_id, type, name, description, road_address, address_detail, latitude, longitude, floor, entrance_instructions, gender_type, wheelchair_accessible, baby_changing_available, sanitary_products_available, access_method, publication_status, created_at, updated_at")
+      .single();
 
-  if (error || !updated) {
-    throw new MerchantRestroomError("UPDATE_FAILED", `화장실 정보 수정 실패: ${error?.message}`, 500);
+    if (error || !updated) {
+      throw new MerchantRestroomError("UPDATE_FAILED", `화장실 정보 수정 실패: ${error?.message}`, 500);
+    }
+    updatedRestroom = updated;
   }
 
-  return updated;
+  if (input.hours !== undefined) {
+    const savedHours = await replaceMerchantRestroomHours(
+      supabase,
+      restroomId,
+      input.hours
+    );
+    return { ...updatedRestroom, hours: savedHours };
+  }
+
+  return updatedRestroom;
 }
 
 /**

@@ -14,10 +14,18 @@ export interface DepositPaymentButtonProps {
 
 export default function DepositPaymentButton({
   restroom,
-  defaultAmount = 1000,
+  defaultAmount,
   initialUser = null,
   customPaymentRequester,
 }: DepositPaymentButtonProps) {
+  const resolvedAmount =
+    restroom.active_policy?.access_mode === "test_deposit" &&
+    typeof restroom.active_policy.deposit_amount_krw === "number" &&
+    restroom.active_policy.deposit_amount_krw > 0
+      ? restroom.active_policy.deposit_amount_krw
+      : typeof defaultAmount === "number" && defaultAmount > 0
+      ? defaultAmount
+      : null;
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [currentUser, setCurrentUser] = useState<{ id: string; email?: string | null; name?: string | null } | null>(
     initialUser
@@ -62,15 +70,15 @@ export default function DepositPaymentButton({
     };
   }, [initialUser]);
 
-  // NEVER render payment button for public restrooms!
-  if (restroom.type === "public") {
+  // NEVER render payment button for public restrooms or non-deposit/invalid-amount restrooms!
+  if (restroom.type === "public" || resolvedAmount === null) {
     return null;
   }
 
   const handleClick = () => {
     trackPaymentButtonClicked({
       restroom,
-      depositAmountKrw: defaultAmount,
+      depositAmountKrw: resolvedAmount,
     });
     setIsModalOpen(true);
   };
@@ -84,7 +92,7 @@ export default function DepositPaymentButton({
         className="flex min-h-[48px] w-full flex-1 items-center justify-center gap-2 rounded-xl bg-purple-600 px-4 py-3 text-sm font-bold text-white shadow-md hover:bg-purple-700 active:scale-[0.99] transition"
       >
         <span>💳</span>
-        <span>안심 제휴 보증금 결제 ({defaultAmount.toLocaleString()}원)</span>
+        <span>안심 제휴 보증금 결제 ({resolvedAmount.toLocaleString()}원)</span>
       </button>
 
       {isModalOpen && (
@@ -93,7 +101,7 @@ export default function DepositPaymentButton({
           isOpen={isModalOpen}
           onClose={() => setIsModalOpen(false)}
           user={currentUser}
-          defaultDepositAmount={defaultAmount}
+          defaultDepositAmount={resolvedAmount}
           customPaymentRequester={customPaymentRequester}
         />
       )}

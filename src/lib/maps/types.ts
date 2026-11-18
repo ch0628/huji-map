@@ -27,8 +27,13 @@ export interface MarkerOptions {
   readonly id: string;
   readonly position: LatLng;
   readonly title?: string;
-  /** 화장실 유형별 시각적 구분 (public: 공공, partner: 제휴) */
-  readonly type?: "public" | "partner" | "current_location" | "default";
+  /** 화장실 및 장소 유형별 시각적 구분 (public: 공공, partner: 제휴, search_place: 검색 장소) */
+  readonly type?:
+    | "public"
+    | "partner"
+    | "current_location"
+    | "search_place"
+    | "default";
   readonly zIndex?: number;
   /** 선택된 마커 강조 표시 */
   readonly selected?: boolean;

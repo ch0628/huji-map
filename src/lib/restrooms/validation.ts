@@ -496,3 +496,24 @@ export function parseBBoxString(bbox: string): ParsedBBox {
   return { south, west, north, east };
 }
 
+/**
+ * Query schema for GET /api/v1/restrooms/search
+ * Format: ?q=keyword&type=all|public|partner&limit=10
+ */
+export const restroomSearchQuerySchema = z.object({
+  q: z
+    .string({ message: "검색어(q) 파라미터가 필요합니다." })
+    .trim()
+    .min(1, "검색어를 1자 이상 입력해 주세요.")
+    .max(100, "검색어는 최대 100자까지 입력할 수 있습니다."),
+  type: z.enum(["all", "public", "partner"]).default("all"),
+  limit: z.coerce
+    .number()
+    .int("조회 개수는 정수여야 합니다.")
+    .min(1, "최소 1개 이상 조회해야 합니다.")
+    .max(30, "최대 30개까지 조회할 수 있습니다.")
+    .default(10),
+});
+
+export type RestroomSearchQueryInput = z.infer<typeof restroomSearchQuerySchema>;
+

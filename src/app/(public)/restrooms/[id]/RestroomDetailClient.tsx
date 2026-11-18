@@ -48,6 +48,15 @@ export default function RestroomDetailClient({
 }: RestroomDetailClientProps) {
   const [showDirections, setShowDirections] = useState<boolean>(false);
   const isPartner = restroom.type === "partner";
+  const activePolicy = restroom.active_policy ?? null;
+  const policyMode = activePolicy?.access_mode ?? null;
+  const depositAmountKrw =
+    policyMode === "test_deposit" &&
+    typeof activePolicy?.deposit_amount_krw === "number" &&
+    activePolicy.deposit_amount_krw > 0
+      ? activePolicy.deposit_amount_krw
+      : null;
+  const canPayTestDeposit = isPartner && policyMode === "test_deposit" && depositAmountKrw !== null;
   const { trackDetailOpened, trackDirectionsClicked } = useEventTracker();
 
   useEffect(() => {
@@ -117,7 +126,7 @@ export default function RestroomDetailClient({
           </p>
         )}
 
-        {/* 액션 버튼: 길찾기 & 제휴 결제 (공공은 결제 버튼 없음) */}
+        {/* 액션 버튼: 길찾기 & 제휴 결제 (유효한 test_deposit 제휴 화장실만 결제 버튼 노출) */}
         <div className="mt-5 flex flex-col sm:flex-row items-center gap-2.5 pt-4 border-t border-slate-100 dark:border-slate-800">
           <button
             type="button"
@@ -129,11 +138,11 @@ export default function RestroomDetailClient({
             <span>길찾기 (카카오·네이버·구글)</span>
           </button>
 
-          {/* 제휴 화장실에만 결제 버튼 제공 (공공 화장실은 렌더링되지 않음) */}
-          {isPartner && (
+          {/* test_deposit 제휴 화장실에만 결제 버튼 제공 (공공/무료/미설정 화장실은 미노출) */}
+          {canPayTestDeposit && (
             <DepositPaymentButton
               restroom={restroom}
-              defaultAmount={1000}
+              defaultAmount={depositAmountKrw}
               initialUser={currentUser}
               customPaymentRequester={customPaymentRequester}
             />
@@ -142,36 +151,86 @@ export default function RestroomDetailClient({
       </div>
 
       {/* 이용 조건 및 정책 안내 */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div
+        data-testid="restroom-policy-section"
+        className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900"
+      >
         <h2 className="text-sm font-bold text-slate-900 dark:text-white mb-3">
           📋 이용 조건 및 규정
         </h2>
 
         {isPartner ? (
-          <div className="space-y-3">
-            <div className="rounded-xl bg-purple-50 p-3.5 text-xs text-purple-900 dark:bg-purple-950/40 dark:text-purple-200 border border-purple-200/50 dark:border-purple-900/50">
-              <p className="font-bold text-sm mb-1">
-                ⚠️ 제휴 화장실 안심 보증금 제도
+          policyMode === "free" ? (
+            <div
+              data-testid="partner-free-policy-box"
+              className="rounded-xl bg-emerald-50 p-3.5 text-xs text-emerald-950 dark:bg-emerald-950/40 dark:text-emerald-200 border border-emerald-200/60 dark:border-emerald-900/50"
+            >
+              <p className="font-bold text-sm mb-1">🤝 안심 제휴 무료 이용</p>
+              <p className="leading-relaxed">
+                제휴 매장에서 보증금 없이 무료로 개방하는 화장실입니다. 별도의 결제 없이 이용 안내에 따라 출입하실 수 있습니다.
               </p>
-              <ul className="list-disc pl-4 space-y-1 text-xs">
-                <li>
-                  <strong>테스트 보증금:</strong> 1,000원 (실제 결제 아님 / 테스트 모드)
-                </li>
-                <li>
-                  <strong>영수증 환급 조건:</strong> 제휴 매장 실제 이용(구매) 영수증
-                  사진을 제출한 후, 관리자 수동 심사를 거쳐 승인 완료 시에만
-                  보증금 전액이 환급(테스트 결제 취소)됩니다. (OCR 및 자동 환급 없음, 심사 반려 시 미환급)
-                </li>
-                <li>
-                  <strong>환급 신청 기한:</strong> 이용 시작 후 24시간 이내 (테스트 기본값)
-                </li>
-                <li>
-                  <strong>도어락 비밀번호:</strong> 결제 승인 완료 후에만 안전하게
-                  공개됩니다. (현재 화면에 노출되지 않음)
-                </li>
-              </ul>
             </div>
-          </div>
+          ) : policyMode === "test_deposit" && depositAmountKrw !== null ? (
+            <div className="space-y-3">
+              <div
+                data-testid="partner-deposit-policy-box"
+                className="rounded-xl bg-purple-50 p-3.5 text-xs text-purple-900 dark:bg-purple-950/40 dark:text-purple-200 border border-purple-200/50 dark:border-purple-900/50"
+              >
+                <p className="font-bold text-sm mb-1">
+                  ⚠️ 제휴 화장실 안심 보증금 제도
+                </p>
+                <ul className="list-disc pl-4 space-y-1 text-xs">
+                  <li>
+                    <strong>테스트 보증금:</strong>{" "}
+                    {depositAmountKrw.toLocaleString()}원 (실제 결제 아님 / 테스트 모드)
+                  </li>
+                  <li>
+                    <strong>영수증 환급 조건:</strong>{" "}
+                    {activePolicy?.refund_eligible
+                      ? `제휴 매장 실제 이용(구매) 영수증 사진을 제출한 후, 관리자 수동 심사를 거쳐 승인 완료 시에만 보증금 전액이 환급(테스트 결제 취소)됩니다. (OCR 및 자동 환급 없음, 심사 반려 시 미환급)`
+                      : "환급 미대상 정책입니다."}
+                  </li>
+                  {activePolicy?.refund_eligible && (
+                    <li>
+                      <strong>환급 신청 기한:</strong> 이용 시작 후{" "}
+                      {activePolicy.receipt_window_hours ?? 24}시간 이내
+                    </li>
+                  )}
+                  {typeof activePolicy?.min_purchase_krw === "number" &&
+                    activePolicy.min_purchase_krw > 0 && (
+                      <li>
+                        <strong>최소 구매 기준:</strong>{" "}
+                        {activePolicy.min_purchase_krw.toLocaleString()}원 이상 매장 이용 영수증
+                      </li>
+                    )}
+                  <li>
+                    <strong>도어락 비밀번호:</strong> 결제 승인 완료 후에만 안전하게
+                    공개됩니다. (현재 화면에 노출되지 않음)
+                  </li>
+                </ul>
+              </div>
+            </div>
+          ) : policyMode === "real_deposit" ? (
+            <div
+              data-testid="partner-real-deposit-policy-box"
+              className="rounded-xl bg-amber-50 p-3.5 text-xs text-amber-950 dark:bg-amber-950/40 dark:text-amber-200 border border-amber-200/60 dark:border-amber-900/50"
+            >
+              <p className="font-bold text-sm mb-1">⚠️ 실거래 보증금 정책 미지원</p>
+              <p className="leading-relaxed">
+                현재 테스트 환경에서는 실거래 보증금 결제가 비활성화되어 있습니다.
+              </p>
+            </div>
+          ) : (
+            <div
+              data-testid="partner-missing-policy-box"
+              className="rounded-xl bg-slate-50 p-3.5 text-xs text-slate-800 dark:bg-slate-800/60 dark:text-slate-200 border border-slate-200 dark:border-slate-700"
+            >
+              <p className="font-bold text-sm mb-1">📋 이용 정책 확인 필요</p>
+              <p className="leading-relaxed">
+                현재 활성화된 이용 정책 정보가 설정되지 않았습니다. 매장 안내를 확인해 주세요.
+              </p>
+            </div>
+          )
         ) : (
           <div className="rounded-xl bg-blue-50 p-3.5 text-xs text-blue-900 dark:bg-blue-950/40 dark:text-blue-200 border border-blue-200/50 dark:border-blue-900/50">
             <p className="font-bold text-sm mb-1">✨ 무료 공공 화장실</p>
@@ -250,12 +309,15 @@ export default function RestroomDetailClient({
       </div>
 
       {/* 운영 시간 정보 */}
-      {restroom.hours && restroom.hours.length > 0 && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <h2 className="text-sm font-bold text-slate-900 dark:text-white mb-3">
-            🕒 운영 시간
-          </h2>
+      <div
+        data-testid="restroom-hours-section"
+        className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900"
+      >
+        <h2 className="text-sm font-bold text-slate-900 dark:text-white mb-3">
+          🕒 운영 시간
+        </h2>
 
+        {restroom.hours && restroom.hours.length > 0 ? (
           <div className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
             {restroom.hours.map((h) => (
               <div
@@ -269,14 +331,23 @@ export default function RestroomDetailClient({
                   {h.is_closed
                     ? "휴무"
                     : h.opens_at && h.closes_at
-                    ? `${h.opens_at.slice(0, 5)} ~ ${h.closes_at.slice(0, 5)}`
-                    : "24시간 운영"}
+                    ? `${h.opens_at.slice(0, 5)} ~ ${
+                        h.crosses_midnight ? "익일 " : ""
+                      }${h.closes_at.slice(0, 5)}`
+                    : "운영시간 정보 없음"}
                 </span>
               </div>
             ))}
           </div>
-        </div>
-      )}
+        ) : (
+          <p
+            data-testid="restroom-hours-empty"
+            className="text-xs text-slate-500 dark:text-slate-400"
+          >
+            운영시간 정보 없음
+          </p>
+        )}
+      </div>
 
       {/* 제휴 가게 정보 (제휴 화장실인 경우에만 노출) */}
       {isPartner && restroom.business && (

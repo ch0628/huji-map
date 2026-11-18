@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import type {
   Restroom,
+  RestroomHour,
   GenderType,
   AccessMethod,
   PublicationStatus,
@@ -11,26 +12,76 @@ import type {
 import {
   createMerchantRestroomSchema,
   updateMerchantRestroomSchema,
+  type RestroomHourInput,
 } from "@/lib/restrooms/merchant-validation";
+import type { AddressSearchFn, AddressSearchResult } from "@/lib/maps/address-search";
+import AddressSearchField from "@/components/map/AddressSearchField";
+
+type WeekdayMode = "unset" | "open" | "closed";
+
+interface WeekdayHourState {
+  mode: WeekdayMode;
+  opensAt: string;
+  closesAt: string;
+}
+
+const WEEKDAY_DISPLAY_ORDER: ReadonlyArray<{ weekday: number; label: string }> = [
+  { weekday: 1, label: "월요일" },
+  { weekday: 2, label: "화요일" },
+  { weekday: 3, label: "수요일" },
+  { weekday: 4, label: "목요일" },
+  { weekday: 5, label: "금요일" },
+  { weekday: 6, label: "토요일" },
+  { weekday: 0, label: "일요일" },
+];
+
+function buildInitialHoursMap(
+  hoursList?: readonly Partial<RestroomHour>[]
+): Record<number, WeekdayHourState> {
+  const result: Record<number, WeekdayHourState> = {};
+  for (let d = 0; d <= 6; d++) {
+    result[d] = { mode: "unset", opensAt: "09:00", closesAt: "22:00" };
+  }
+  if (!hoursList || hoursList.length === 0) {
+    return result;
+  }
+  for (const h of hoursList) {
+    if (typeof h.weekday !== "number" || h.weekday < 0 || h.weekday > 6) continue;
+    if (h.is_closed) {
+      result[h.weekday] = { mode: "closed", opensAt: "09:00", closesAt: "22:00" };
+    } else if (h.opens_at && h.closes_at) {
+      result[h.weekday] = {
+        mode: "open",
+        opensAt: h.opens_at.slice(0, 5),
+        closesAt: h.closes_at.slice(0, 5),
+      };
+    }
+  }
+  return result;
+}
 
 interface RestroomFormProps {
   businessId: string;
   businessName?: string;
-  initialData?: Partial<Restroom>;
+  initialData?: Partial<Restroom> & { hours?: RestroomHour[] };
+  initialHours?: RestroomHour[];
   mode: "create" | "edit";
   publicationStatus?: PublicationStatus;
   onSuccess?: (savedRestroom: any) => void;
   onCancel?: () => void;
+  addressSearchFn?: AddressSearchFn;
 }
 
 export default function RestroomForm({
   businessId,
   businessName,
   initialData,
+  initialHours,
   mode,
   publicationStatus = "draft",
   onSuccess,
   onCancel,
+  addressSearchFn,
 }: RestroomFormProps) {
   const router = useRouter();
   const isEdit = mode === "edit";
@@ -41,15 +92,19 @@ export default function RestroomForm({
   const [description, setDescription] = useState(initialData?.description || "");
   const [roadAddress, setRoadAddress] = useState(initialData?.road_address || "");
   const [addressDetail, setAddressDetail] = useState(initialData?.address_detail || "");
-  const [latitude, setLatitude] = useState<string>(
-    initialData?.latitude !== undefined && initialData?.latitude !== null
-      ? String(initialData.latitude)
-      : ""
+  const [latitude, setLatitude] = useState<number | null>(
+    initialData?.latitude !== undefined &&
+      initialData?.latitude !== null &&
+      Number.isFinite(initialData.latitude)
+      ? initialData.latitude
+      : null
   );
-  const [longitude, setLongitude] = useState<string>(
-    initialData?.longitude !== undefined && initialData?.longitude !== null
-      ? String(initialData.longitude)
-      : ""
+  const [longitude, setLongitude] = useState<number | null>(
+    initialData?.longitude !== undefined &&
+      initialData?.longitude !== null &&
+      Number.isFinite(initialData.longitude)
+      ? initialData.longitude
+      : null
   );
   const [floor, setFloor] = useState(initialData?.floor || "");
   const [entranceInstructions, setEntranceInstructions] = useState(
@@ -71,16 +126,114 @@ export default function RestroomForm({
     initialData?.access_method || "ask_staff"
   );
 
-  // Policy Mode (only for new creation)
+  // Operating Hours State (0=일..6=토)
+  const [hoursByDay, setHoursByDay] = useState<Record<number, WeekdayHourState>>(() =>
+    buildInitialHoursMap(initialHours ?? initialData?.hours)
+  );
+
+  // Policy Mode & Deposit Amount (only for new creation)
   const [policyMode, setPolicyMode] = useState<"free_with_ad" | "deposit_with_ad">(
     "free_with_ad"
   );
+  const [depositAmountInput, setDepositAmountInput] = useState<string>("1000");
 
   // Status & Validation
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [serverError, setServerError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const updateDayHours = (weekday: number, patch: Partial<WeekdayHourState>) => {
+    setHoursByDay((prev) => ({
+      ...prev,
+      [weekday]: { ...prev[weekday], ...patch },
+    }));
+  };
+
+  const applyDailyPreset = () => {
+    setHoursByDay(() => {
+      const next: Record<number, WeekdayHourState> = {};
+      for (let d = 0; d <= 6; d++) {
+        next[d] = { mode: "open", opensAt: "09:00", closesAt: "22:00" };
+      }
+      return next;
+    });
+  };
+
+  const applyWeekdayOnlyPreset = () => {
+    setHoursByDay(() => {
+      const next: Record<number, WeekdayHourState> = {};
+      for (let d = 0; d <= 6; d++) {
+        if (d === 0 || d === 6) {
+          next[d] = { mode: "closed", opensAt: "09:00", closesAt: "18:00" };
+        } else {
+          next[d] = { mode: "open", opensAt: "09:00", closesAt: "18:00" };
+        }
+      }
+      return next;
+    });
+  };
+
+  const clearHoursPreset = () => {
+    setHoursByDay(buildInitialHoursMap([]));
+  };
+
+  const buildHoursPayload = (): { hours: RestroomHourInput[]; error: string | null } => {
+    const result: RestroomHourInput[] = [];
+    for (const { weekday, label } of WEEKDAY_DISPLAY_ORDER) {
+      const state = hoursByDay[weekday];
+      if (!state || state.mode === "unset") continue;
+      if (state.mode === "closed") {
+        result.push({
+          weekday,
+          is_closed: true,
+          opens_at: null,
+          closes_at: null,
+        });
+      } else {
+        if (!state.opensAt || !state.closesAt) {
+          return {
+            hours: [],
+            error: `${label} 운영시간의 시작·종료 시간을 모두 입력해 주세요.`,
+          };
+        }
+        if (state.opensAt.slice(0, 5) === state.closesAt.slice(0, 5)) {
+          return {
+            hours: [],
+            error: `${label}의 시작 시간과 종료 시간은 같을 수 없습니다.`,
+          };
+        }
+        result.push({
+          weekday,
+          is_closed: false,
+          opens_at: state.opensAt,
+          closes_at: state.closesAt,
+        });
+      }
+    }
+    return { hours: result, error: null };
+  };
+
+  const hasValidCoordinates =
+    latitude !== null &&
+    longitude !== null &&
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    !(latitude === 0 && longitude === 0);
+
+  const handleSelectAddress = (result: AddressSearchResult) => {
+    setRoadAddress(result.roadAddress);
+    setLatitude(result.lat);
+    setLongitude(result.lng);
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      delete next.road_address;
+      delete next.latitude;
+      delete next.longitude;
+      delete next.coordinates;
+      return next;
+    });
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -90,16 +243,35 @@ export default function RestroomForm({
     setServerError(null);
     setSuccessMessage(null);
 
-    const parsedLat = parseFloat(latitude);
-    const parsedLng = parseFloat(longitude);
-
-    if (isNaN(parsedLat)) {
-      setFieldErrors((prev) => ({ ...prev, latitude: "위도를 올바른 숫자로 입력해 주세요." }));
+    if (!isPublished && (!roadAddress.trim() || !hasValidCoordinates)) {
+      setFieldErrors((prev) => ({
+        ...prev,
+        ...(!roadAddress.trim()
+          ? { road_address: "주소 검색을 통해 도로명주소를 선택해 주세요." }
+          : {}),
+        coordinates:
+          "주소 검색을 통해 도로명주소 또는 지번주소를 선택해 위치를 확정해 주세요.",
+      }));
       return;
     }
-    if (isNaN(parsedLng)) {
-      setFieldErrors((prev) => ({ ...prev, longitude: "경도를 올바른 숫자로 입력해 주세요." }));
+
+    const { hours: hoursPayload, error: hoursError } = buildHoursPayload();
+    if (hoursError) {
+      setFieldErrors((prev) => ({ ...prev, hours: hoursError }));
       return;
+    }
+
+    let parsedDepositAmount: number | undefined;
+    if (mode === "create" && policyMode === "deposit_with_ad") {
+      const num = Number(depositAmountInput);
+      if (!Number.isInteger(num) || num <= 0) {
+        setFieldErrors((prev) => ({
+          ...prev,
+          deposit_amount_krw: "테스트 보증금 금액은 1원 이상의 정수로 입력해 주세요.",
+        }));
+        return;
+      }
+      parsedDepositAmount = num;
     }
 
     const idempotencyKey = crypto.randomUUID();
@@ -108,14 +280,14 @@ export default function RestroomForm({
       setIsSubmitting(true);
 
       if (mode === "create") {
-        const payload = {
+        const payload: Record<string, any> = {
           business_id: businessId,
           name: name.trim(),
           description: description.trim() || undefined,
           road_address: roadAddress.trim(),
           address_detail: addressDetail.trim() || undefined,
-          latitude: parsedLat,
-          longitude: parsedLng,
+          latitude: latitude!,
+          longitude: longitude!,
           floor: floor.trim() || undefined,
           entrance_instructions: entranceInstructions.trim() || undefined,
           gender_type: genderType,
@@ -125,6 +297,12 @@ export default function RestroomForm({
           access_method: accessMethod,
           policy_mode: policyMode,
         };
+        if (parsedDepositAmount !== undefined) {
+          payload.deposit_amount_krw = parsedDepositAmount;
+        }
+        if (hoursPayload.length > 0) {
+          payload.hours = hoursPayload;
+        }
 
         const validation = createMerchantRestroomSchema.safeParse(payload);
         if (!validation.success) {
@@ -172,13 +350,14 @@ export default function RestroomForm({
           baby_changing_available: babyChangingAvailable,
           sanitary_products_available: sanitaryProductsAvailable,
           access_method: accessMethod,
+          hours: hoursPayload,
         };
 
         // If not published, road_address, lat, lng can be modified
         if (!isPublished) {
           patch.road_address = roadAddress.trim();
-          patch.latitude = parsedLat;
-          patch.longitude = parsedLng;
+          patch.latitude = latitude!;
+          patch.longitude = longitude!;
         }
 
         const validation = updateMerchantRestroomSchema.safeParse(patch);
@@ -325,30 +504,17 @@ export default function RestroomForm({
       <div className="space-y-3 border-t border-slate-100 pt-4 dark:border-slate-800">
         <h3 className="text-sm font-bold text-slate-900 dark:text-white">2. 위치 및 출입 안내</h3>
 
-        {/* 도로명 주소 */}
-        <div>
-          <label htmlFor="restroom-road-address" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-            도로명주소 <span className="text-rose-500">*</span>
-          </label>
-          <input
-            id="restroom-road-address"
-            type="text"
-            value={roadAddress}
-            disabled={isPublished}
-            onChange={(e) => setRoadAddress(e.target.value)}
-            placeholder="예: 경기도 수원시 팔달구 매산로 1"
-            maxLength={300}
-            required
-            className={`mt-1 block w-full rounded-xl border px-3 py-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none dark:bg-slate-800 dark:text-white min-h-[44px] ${
-              isPublished
-                ? "cursor-not-allowed bg-slate-100 border-slate-200 dark:bg-slate-800/40 dark:border-slate-700 text-slate-500"
-                : "border-slate-300 bg-white dark:border-slate-700"
-            }`}
-          />
-          {fieldErrors.road_address && (
-            <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">{fieldErrors.road_address}</p>
-          )}
-        </div>
+        <AddressSearchField
+          roadAddress={roadAddress}
+          hasCoordinates={hasValidCoordinates}
+          disabled={isPublished}
+          showJibunAddress={false}
+          roadAddressInputId="restroom-road-address"
+          roadAddressError={fieldErrors.road_address}
+          coordinatesError={fieldErrors.coordinates}
+          onSelectAddress={handleSelectAddress}
+          addressSearchFn={addressSearchFn}
+        />
 
         {/* 상세 주소 및 층수 */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -382,60 +548,6 @@ export default function RestroomForm({
             />
           </div>
         </div>
-
-        {/* 좌표 (위도, 경도) - 360px 모바일 1열 스택 */}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div>
-            <label htmlFor="restroom-latitude" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-              위도 (Latitude) <span className="text-rose-500">*</span>
-            </label>
-            <input
-              id="restroom-latitude"
-              type="number"
-              step="any"
-              value={latitude}
-              disabled={isPublished}
-              onChange={(e) => setLatitude(e.target.value)}
-              placeholder="37.2636"
-              required
-              className={`mt-1 block w-full rounded-xl border px-3 py-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none dark:bg-slate-800 dark:text-white min-h-[44px] ${
-                isPublished
-                  ? "cursor-not-allowed bg-slate-100 border-slate-200 dark:bg-slate-800/40 dark:border-slate-700 text-slate-500"
-                  : "border-slate-300 bg-white dark:border-slate-700"
-              }`}
-            />
-            {fieldErrors.latitude && (
-              <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">{fieldErrors.latitude}</p>
-            )}
-          </div>
-
-          <div>
-            <label htmlFor="restroom-longitude" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-              경도 (Longitude) <span className="text-rose-500">*</span>
-            </label>
-            <input
-              id="restroom-longitude"
-              type="number"
-              step="any"
-              value={longitude}
-              disabled={isPublished}
-              onChange={(e) => setLongitude(e.target.value)}
-              placeholder="127.0286"
-              required
-              className={`mt-1 block w-full rounded-xl border px-3 py-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none dark:bg-slate-800 dark:text-white min-h-[44px] ${
-                isPublished
-                  ? "cursor-not-allowed bg-slate-100 border-slate-200 dark:bg-slate-800/40 dark:border-slate-700 text-slate-500"
-                  : "border-slate-300 bg-white dark:border-slate-700"
-              }`}
-            />
-            {fieldErrors.longitude && (
-              <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">{fieldErrors.longitude}</p>
-            )}
-          </div>
-        </div>
-        <p className="text-[11px] text-slate-500 dark:text-slate-400">
-          📍 WGS84 소수점 좌표 (예: 수원역 부근 37.2636, 127.0286)
-        </p>
 
         {/* 출입 안내 */}
         <div>
@@ -532,16 +644,154 @@ export default function RestroomForm({
 
           {accessMethod === "pin" && (
             <p className="mt-1.5 rounded-lg bg-blue-50 p-2.5 text-[11px] leading-relaxed text-blue-800 dark:bg-blue-950/40 dark:text-blue-300">
-              🔒 <strong>도어락 비밀번호 안내:</strong> 도어락 PIN은 심사 승인 및 안전한 암호화 채널을 통해 등록·관리됩니다. (평문 비밀번호 노출 방지 원칙)
+              🔒 <strong>도어락 비밀번호 안내:</strong> 화장실 등록 후 상세 화면의 &lsquo;도어락 비밀번호(PIN) 관리&rsquo;에서 안전하게 암호화하여 등록·변경할 수 있습니다.
             </p>
           )}
         </div>
       </div>
 
-      {/* 4. 초기 이용 정책 (신규 등록 시에만 노출) */}
+      {/* 4. 요일별 운영시간 및 휴무일 설정 */}
+      <div
+        data-testid="restroom-hours-editor"
+        className="space-y-3 border-t border-slate-100 pt-4 dark:border-slate-800"
+      >
+        <div className="flex flex-col gap-1">
+          <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+            4. 운영시간 및 휴무일 설정 (선택)
+          </h3>
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+            요일별 이용 가능 시간 또는 휴무일을 설정할 수 있습니다. 미설정으로 두면 공개 페이지에 &lsquo;운영시간 정보 없음&rsquo;으로 표시됩니다.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            onClick={applyDailyPreset}
+            data-testid="hours-preset-daily"
+            className="min-h-[36px] rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            매일 09:00~22:00
+          </button>
+          <button
+            type="button"
+            onClick={applyWeekdayOnlyPreset}
+            data-testid="hours-preset-weekday"
+            className="min-h-[36px] rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            평일 09:00~18:00 · 주말 휴무
+          </button>
+          <button
+            type="button"
+            onClick={clearHoursPreset}
+            data-testid="hours-preset-clear"
+            className="min-h-[36px] rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400"
+          >
+            전체 미설정
+          </button>
+        </div>
+
+        {fieldErrors.hours && (
+          <p className="text-xs font-semibold text-rose-600 dark:text-rose-400">
+            ⚠️ {fieldErrors.hours}
+          </p>
+        )}
+
+        <div className="space-y-2">
+          {WEEKDAY_DISPLAY_ORDER.map(({ weekday, label }) => {
+            const state = hoursByDay[weekday] || {
+              mode: "unset",
+              opensAt: "09:00",
+              closesAt: "22:00",
+            };
+            const crossesMidnight =
+              state.mode === "open" &&
+              state.opensAt &&
+              state.closesAt &&
+              state.closesAt < state.opensAt;
+
+            return (
+              <div
+                key={weekday}
+                data-testid={`hour-row-${weekday}`}
+                className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50/70 p-2.5 dark:border-slate-800 dark:bg-slate-800/40"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                    {label}
+                  </span>
+                  <select
+                    aria-label={`${label} 운영 상태`}
+                    data-testid={`hour-mode-${weekday}`}
+                    value={state.mode}
+                    onChange={(e) =>
+                      updateDayHours(weekday, {
+                        mode: e.target.value as WeekdayMode,
+                      })
+                    }
+                    className="min-h-[36px] rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                  >
+                    <option value="unset">미설정</option>
+                    <option value="open">운영시간 입력</option>
+                    <option value="closed">휴무</option>
+                  </select>
+                </div>
+
+                {state.mode === "open" && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="min-w-0">
+                      <label
+                        htmlFor={`hour-opens-${weekday}`}
+                        className="block text-[10px] font-medium text-slate-500 dark:text-slate-400"
+                      >
+                        시작
+                      </label>
+                      <input
+                        id={`hour-opens-${weekday}`}
+                        data-testid={`hour-opens-${weekday}`}
+                        type="time"
+                        value={state.opensAt}
+                        onChange={(e) =>
+                          updateDayHours(weekday, { opensAt: e.target.value })
+                        }
+                        className="mt-0.5 block min-h-[40px] w-full min-w-0 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                      />
+                    </div>
+                    <div className="min-w-0">
+                      <label
+                        htmlFor={`hour-closes-${weekday}`}
+                        className="block text-[10px] font-medium text-slate-500 dark:text-slate-400"
+                      >
+                        종료
+                      </label>
+                      <input
+                        id={`hour-closes-${weekday}`}
+                        data-testid={`hour-closes-${weekday}`}
+                        type="time"
+                        value={state.closesAt}
+                        onChange={(e) =>
+                          updateDayHours(weekday, { closesAt: e.target.value })
+                        }
+                        className="mt-0.5 block min-h-[40px] w-full min-w-0 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                      />
+                    </div>
+                    {crossesMidnight && (
+                      <p className="col-span-2 text-[10px] font-medium text-indigo-700 dark:text-indigo-300">
+                        🌙 종료 시간이 시작 시간보다 빨라 익일({state.closesAt}) 종료로 저장됩니다.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 5. 초기 이용 정책 (신규 등록 시에만 노출) */}
       {!isEdit && (
         <div className="space-y-3 border-t border-slate-100 pt-4 dark:border-slate-800">
-          <h3 className="text-sm font-bold text-slate-900 dark:text-white">4. 이용 정책 선택</h3>
+          <h3 className="text-sm font-bold text-slate-900 dark:text-white">5. 이용 정책 선택</h3>
           <p className="text-xs text-slate-500 dark:text-slate-400">
             화장실 이용자에게 적용할 기본 정책을 선택해 주세요. 등록 후 상세 페이지에서 언제든지 정책 버전을 변경할 수 있습니다.
           </p>
@@ -585,14 +835,40 @@ export default function RestroomForm({
                 onChange={() => setPolicyMode("deposit_with_ad")}
                 className="mt-0.5 h-4 w-4 text-blue-600 focus:ring-blue-500"
               />
-              <div className="text-xs">
+              <div className="flex-1 min-w-0 text-xs">
                 <span className="font-bold text-slate-900 dark:text-white">테스트 보증금 모드 (환급형)</span>
                 <p className="mt-0.5 text-slate-500 dark:text-slate-400 leading-relaxed">
-                  테스트 보증금 1,000원이 설정되며, 24시간 이내 영수증 인증 시 전액 환급됩니다.
+                  설정한 테스트 보증금(기본 1,000원)이 적용되며, 24시간 이내 영수증 인증 시 전액 환급됩니다.
                 </p>
                 <span className="mt-1 inline-block rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-200">
                   ⚠️ 개발 테스트 환경 · 실제 돈 차감 없음
                 </span>
+
+                {policyMode === "deposit_with_ad" && (
+                  <div className="mt-2.5">
+                    <label
+                      htmlFor="restroom-deposit-amount"
+                      className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300"
+                    >
+                      테스트 보증금 금액 (원)
+                    </label>
+                    <input
+                      id="restroom-deposit-amount"
+                      data-testid="restroom-deposit-amount-input"
+                      type="number"
+                      min={100}
+                      step={100}
+                      value={depositAmountInput}
+                      onChange={(e) => setDepositAmountInput(e.target.value)}
+                      className="mt-1 block min-h-[40px] w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                    />
+                    {fieldErrors.deposit_amount_krw && (
+                      <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">
+                        {fieldErrors.deposit_amount_krw}
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             </label>
           </div>

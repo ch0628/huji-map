@@ -95,8 +95,21 @@ const createProvider = (): MapProvider & {
     relayout: vi.fn(),
   }) as any;
 
-function mockFetch() {
+function mockFetch(searchableRestrooms: PublicRestroomSummary[] = []) {
   const fn = vi.fn().mockImplementation(async (url: string) => {
+    if (url.includes("/api/v1/restrooms/search")) {
+      const q = decodeURIComponent(url.split("q=")[1]?.split("&")[0] ?? "").toLowerCase();
+      const matched = searchableRestrooms.filter((r) =>
+        r.name.toLowerCase().includes(q)
+      );
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: { items: matched, total: matched.length, limit: 10 },
+        }),
+      };
+    }
     const bbox = decodeURIComponent(url.split("bbox=")[1].split("&")[0]);
     const [s, , n] = bbox.split(",").map(Number);
     const inSuwon = s > 37.2 && n < 37.35;
@@ -112,6 +125,9 @@ function mockFetch() {
   global.fetch = fn as any;
   return fn;
 }
+
+const bboxFetchCalls = (fn: ReturnType<typeof mockFetch>) =>
+  fn.mock.calls.filter(([u]) => String(u).includes("bbox="));
 
 describe("지역·장소 검색 유틸", () => {
   it("거리 계산·표시 형식", () => {
@@ -144,10 +160,11 @@ describe("지역·장소 검색 유틸", () => {
     expect(out[0]).toMatchObject({ name: "수원역", address: "도로명", lat: 37.2, lng: 127.0 });
   });
 
-  it("마커 아이콘: 현재 위치(점)와 화장실 핀을 구분한다", () => {
+  it("마커 아이콘: 현재 위치(점), 검색 장소(초록 핀), 공공/제휴 화장실 핀을 구분한다", () => {
     const me = getMarkerIcon("current_location")!;
     const pub = getMarkerIcon("public")!;
     const partner = getMarkerIcon("partner")!;
+    const searchPlace = getMarkerIcon("search_place")!;
     const sel = getMarkerIcon("public", true)!;
     const dec = (s: string) => decodeURIComponent(s);
     expect(dec(me.src)).toContain("<circle");
@@ -156,6 +173,9 @@ describe("지역·장소 검색 유틸", () => {
     expect(dec(pub.src)).toContain("<path");
     expect(dec(pub.src)).toContain("#2563eb");
     expect(dec(partner.src)).toContain("#7e22ce");
+    expect(dec(searchPlace.src)).toContain("<path");
+    expect(dec(searchPlace.src)).toContain("#16a34a");
+    expect(dec(searchPlace.src)).not.toContain("WC");
     expect(sel.height).toBeGreaterThan(pub.height);
     expect(dec(sel.src)).toContain("#f59e0b");
     expect(getMarkerIcon("default")).toBeNull();
@@ -171,9 +191,16 @@ describe("MapDiscoveryClient 지역·장소 검색", () => {
     fetchMock = mockFetch();
   });
 
-  const renderClient = (placeSearchFn: any) =>
+  const renderClient = (
+    placeSearchFn: any,
+    restroomSearchFn?: any
+  ) =>
     render(
-      <MapDiscoveryClient providerFactory={() => provider} placeSearchFn={placeSearchFn} />
+      <MapDiscoveryClient
+        providerFactory={() => provider}
+        placeSearchFn={placeSearchFn}
+        restroomSearchFn={restroomSearchFn}
+      />
     );
 
   // 지도 초기화 직후 디바운스된 초기 조회가 끝날 때까지 대기 (기준선 안정화)
@@ -182,29 +209,29 @@ describe("MapDiscoveryClient 지역·장소 검색", () => {
   const type = (v: string) =>
     fireEvent.change(screen.getByTestId("map-search-input"), { target: { value: v } });
 
-  it("안내 문구가 지역/장소 검색이다", async () => {
+  it("안내 문구가 장소·화장실 이름 검색이다", async () => {
     renderClient(vi.fn());
     const input = screen.getByTestId("map-search-input") as HTMLInputElement;
-    expect(input.placeholder).toBe("지역 또는 장소 검색 (예: 수원역, 행궁동)");
+    expect(input.placeholder).toBe("장소 또는 화장실 이름 검색 (예: 수원역, 장안문)");
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
   });
 
-  it("입력 중에는 지도 이동·재조회 없이 결과만 표시하고, 선택 시 이동·재조회한다", async () => {
+  it("입력 중에는 지도 이동·재조회 없이 결과만 표시하고, 선택 시 이동·초록 마커 표시·재조회한다", async () => {
     const search = vi.fn().mockResolvedValue([SUWON_STATION, YATAP]);
-    renderClient(search);
+    renderClient(search, vi.fn().mockResolvedValue([]));
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     await waitFor(() => expect(provider.init).toHaveBeenCalled());
     await settle();
-    const fetchesBefore = fetchMock.mock.calls.length;
+    const fetchesBefore = bboxFetchCalls(fetchMock).length;
     const centerCallsBefore = provider.setCenter.mock.calls.length;
 
     type("수원역");
     await waitFor(() => expect(screen.getByTestId("place-search-results")).toBeDefined());
     await waitFor(() => expect(screen.getByTestId("place-result-p1")).toBeDefined());
     expect(search).toHaveBeenCalledWith("수원역");
-    // 결과 선택 전: 이동 없음
+    // 결과 선택 전: 이동 및 주변 화장실 재조회 없음
     expect(provider.setCenter.mock.calls.length).toBe(centerCallsBefore);
-    expect(fetchMock.mock.calls.length).toBe(fetchesBefore);
+    expect(bboxFetchCalls(fetchMock).length).toBe(fetchesBefore);
 
     fireEvent.click(screen.getByTestId("place-result-p1"));
     await waitFor(() =>
@@ -213,8 +240,12 @@ describe("MapDiscoveryClient 지역·장소 검색", () => {
         true
       )
     );
-    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(fetchesBefore));
-    const lastUrl = decodeURIComponent(fetchMock.mock.calls.at(-1)![0] as string);
+    await waitFor(() =>
+      expect(bboxFetchCalls(fetchMock).length).toBeGreaterThan(fetchesBefore)
+    );
+    const lastUrl = decodeURIComponent(
+      bboxFetchCalls(fetchMock).at(-1)![0] as string
+    );
     const [s, w, n, e] = lastUrl.split("bbox=")[1].split("&")[0].split(",").map(Number);
     expect(SUWON_STATION.lat).toBeGreaterThan(s);
     expect(SUWON_STATION.lat).toBeLessThan(n);
@@ -222,6 +253,18 @@ describe("MapDiscoveryClient 지역·장소 검색", () => {
     expect(SUWON_STATION.lng).toBeLessThan(e);
     expect(screen.queryByTestId("place-search-results")).toBeNull();
     expect(screen.queryByTestId("out-of-service-banner")).toBeNull();
+
+    // 선택한 장소에 초록색 전용 마커(search_place)가 표시되고 기존 공공/제휴 마커는 유지된다
+    const latestMarkers = provider.setMarkers.mock.calls.at(-1)?.[0] ?? [];
+    const anchorMarker = latestMarkers.find(
+      (m: any) => m.id === "search_place_anchor"
+    );
+    expect(anchorMarker).toMatchObject({
+      type: "search_place",
+      title: SUWON_STATION.name,
+      position: { lat: SUWON_STATION.lat, lng: SUWON_STATION.lng },
+    });
+    expect(latestMarkers.some((m: any) => m.type === "public")).toBe(true);
 
     // 목록이 검색 장소에서 가까운 순 + 거리 표시
     fireEvent.click(screen.getByTestId("bottom-sheet-toggle-btn"));
@@ -232,8 +275,56 @@ describe("MapDiscoveryClient 지역·장소 검색", () => {
     expect(screen.getByTestId("bottom-sheet-sort-basis").textContent).toContain("수원역 1호선 기준");
   });
 
+  it("카카오 장소 검색 결과와 휴지맵 화장실 이름 검색 결과를 구분 표시하고 화장실 선택 시 해당 위치로 이동한다", async () => {
+    const partnerHit: PublicRestroomSummary = {
+      ...base,
+      id: "cccccccc-0000-4000-8000-000000000003",
+      type: "partner",
+      name: "수원역 제휴 카페 화장실",
+      road_address: "경기도 수원시 팔달구 매산로 10",
+      latitude: 37.2661,
+      longitude: 127.0012,
+      business_id: "dddddddd-0000-4000-8000-000000000004",
+      business_name: "DEMO 카페",
+      access_mode: "test_deposit",
+      deposit_amount_krw: 1000,
+    };
+    const placeSearch = vi.fn().mockResolvedValue([SUWON_STATION]);
+    const restroomSearch = vi.fn().mockResolvedValue([NEAR, partnerHit]);
+
+    renderClient(placeSearch, restroomSearch);
+    await waitFor(() => expect(provider.init).toHaveBeenCalled());
+    await settle();
+
+    type("수원");
+    await waitFor(() =>
+      expect(screen.getByTestId("search-section-restrooms")).toBeDefined()
+    );
+    expect(screen.getByTestId("search-section-places")).toBeDefined();
+    expect(screen.getByTestId(`restroom-search-result-${NEAR.id}`)).toBeDefined();
+    expect(screen.getByTestId(`restroom-search-result-${partnerHit.id}`)).toBeDefined();
+    expect(screen.getByTestId("place-result-p1")).toBeDefined();
+
+    // 휴지맵 제휴 화장실 검색 결과 선택
+    fireEvent.click(screen.getByTestId(`restroom-search-result-${partnerHit.id}`));
+    await waitFor(() =>
+      expect(provider.setCenter).toHaveBeenCalledWith(
+        { lat: partnerHit.latitude, lng: partnerHit.longitude },
+        true
+      )
+    );
+    expect(screen.getByTestId("map-bottom-sheet-selected")).toBeDefined();
+    expect(screen.getByText("수원역 제휴 카페 화장실")).toBeDefined();
+    // 화장실 직접 선택 시 초록 장소 마커는 남지 않고 해당 화장실 마커가 선택 상태가 됨
+    const latestMarkers = provider.setMarkers.mock.calls.at(-1)?.[0] ?? [];
+    expect(latestMarkers.find((m: any) => m.id === "search_place_anchor")).toBeUndefined();
+    expect(
+      latestMarkers.find((m: any) => m.id === partnerHit.id)?.selected
+    ).toBe(true);
+  });
+
   it("수원시 밖 장소는 결과를 보여주고 선택하면 서비스 범위 안내를 표시한다", async () => {
-    renderClient(vi.fn().mockResolvedValue([YATAP]));
+    renderClient(vi.fn().mockResolvedValue([YATAP]), vi.fn().mockResolvedValue([]));
     await waitFor(() => expect(provider.init).toHaveBeenCalled());
     type("야탑역");
     fireEvent.click(await screen.findByTestId("place-result-p2"));
@@ -246,15 +337,15 @@ describe("MapDiscoveryClient 지역·장소 검색", () => {
   });
 
   it("결과가 없으면 안내하고 기존 지도 마커는 유지한다", async () => {
-    renderClient(vi.fn().mockResolvedValue([]));
+    renderClient(vi.fn().mockResolvedValue([]), vi.fn().mockResolvedValue([]));
     await waitFor(() => expect(provider.setMarkers).toHaveBeenCalled());
     await settle();
     const markerCalls = provider.setMarkers.mock.calls.length;
-    const fetches = fetchMock.mock.calls.length;
+    const fetches = bboxFetchCalls(fetchMock).length;
     type("존재하지않는장소zzz");
     expect((await screen.findByTestId("place-search-empty")).textContent).toContain("검색 결과가 없습니다");
     expect(provider.setMarkers.mock.calls.length).toBe(markerCalls);
-    expect(fetchMock.mock.calls.length).toBe(fetches);
+    expect(bboxFetchCalls(fetchMock).length).toBe(fetches);
   });
 
   it("검색 실패 시 오류를 표시하되 기존 화장실 데이터는 보존한다", async () => {

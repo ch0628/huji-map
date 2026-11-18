@@ -718,7 +718,7 @@ describe("TASK 18: Events UI Hooks & User Tracking Telemetry", () => {
       expect(onDirectionsClick).toHaveBeenCalledWith("google");
     });
 
-    it("PublicRestroomCard: 제휴 화장실 결제 버튼 클릭 시 onPaymentClick을 호출한다", () => {
+    it("PublicRestroomCard: 제휴 화장실(test_deposit) 결제·상세 링크 클릭 시 onPaymentClick을 호출한다", () => {
       const onPaymentClick = vi.fn();
       const mockPartner: PublicRestroomSummary = {
         id: "22222222-2222-4222-8222-222222222222",
@@ -735,6 +735,7 @@ describe("TASK 18: Events UI Hooks & User Tracking Telemetry", () => {
         sanitary_products_available: false,
         last_verified_at: null,
         business_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        access_mode: "test_deposit",
         deposit_amount_krw: 1000,
       };
 
@@ -745,10 +746,8 @@ describe("TASK 18: Events UI Hooks & User Tracking Telemetry", () => {
         />
       );
 
-      const paymentBtn = screen.getByTestId(`partner-payment-btn-${mockPartner.id}`);
-      // Disabled button is wrapped in a clickable div container
-      const wrapper = paymentBtn.parentElement!;
-      fireEvent.click(wrapper);
+      const detailLink = screen.getByTestId(`detail-link-${mockPartner.id}`);
+      fireEvent.click(detailLink);
 
       expect(onPaymentClick).toHaveBeenCalledWith(mockPartner);
     });

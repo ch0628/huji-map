@@ -26,6 +26,7 @@ declare global {
         CustomOverlay: new (options: any) => any;
         services?: {
           Places: new () => any;
+          Geocoder: new () => any;
           Status: { OK: string; ZERO_RESULT: string; ERROR: string };
         };
         event: {

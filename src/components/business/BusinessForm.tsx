@@ -4,17 +4,21 @@ import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Business, BusinessRegistrationStatus } from "@/lib/businesses/types";
 import { createBusinessSchema } from "@/lib/businesses/validation";
+import type { AddressSearchFn, AddressSearchResult } from "@/lib/maps/address-search";
+import AddressSearchField from "@/components/map/AddressSearchField";
 
 interface BusinessFormProps {
   initialData?: Business | null;
   mode?: "create" | "edit";
   onSuccess?: (business: Business) => void;
+  addressSearchFn?: AddressSearchFn;
 }
 
 export default function BusinessForm({
   initialData,
   mode = "create",
   onSuccess,
+  addressSearchFn,
 }: BusinessFormProps) {
   const router = useRouter();
   const isEdit = mode === "edit" && Boolean(initialData);
@@ -41,11 +45,15 @@ export default function BusinessForm({
   const [addressDetail, setAddressDetail] = useState(
     initialData?.address_detail ?? ""
   );
-  const [latitude, setLatitude] = useState<string>(
-    initialData?.latitude != null ? String(initialData.latitude) : ""
+  const [latitude, setLatitude] = useState<number | null>(
+    initialData?.latitude != null && Number.isFinite(initialData.latitude)
+      ? initialData.latitude
+      : null
   );
-  const [longitude, setLongitude] = useState<string>(
-    initialData?.longitude != null ? String(initialData.longitude) : ""
+  const [longitude, setLongitude] = useState<number | null>(
+    initialData?.longitude != null && Number.isFinite(initialData.longitude)
+      ? initialData.longitude
+      : null
   );
   const [phone, setPhone] = useState(initialData?.phone ?? "");
   const [websiteUrl, setWebsiteUrl] = useState(
@@ -60,14 +68,39 @@ export default function BusinessForm({
   const [successBanner, setSuccessBanner] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
+  const hasValidCoordinates =
+    latitude !== null &&
+    longitude !== null &&
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    !(latitude === 0 && longitude === 0);
+
+  const handleSelectAddress = (result: AddressSearchResult) => {
+    setRoadAddress(result.roadAddress);
+    setJibunAddress(result.jibunAddress ?? "");
+    setLatitude(result.lat);
+    setLongitude(result.lng);
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      delete next.road_address;
+      delete next.latitude;
+      delete next.longitude;
+      delete next.coordinates;
+      return next;
+    });
+  };
+
   const validateForm = () => {
     setFieldErrors({});
     setErrorBanner(null);
 
-    const latNum = parseFloat(latitude);
-    const lngNum = parseFloat(longitude);
-
     if (mode === "create") {
+      const errors: Record<string, string> = {};
+      if (!hasValidCoordinates) {
+        errors.coordinates =
+          "주소 검색을 통해 도로명주소 또는 지번주소를 선택해 위치를 확정해 주세요.";
+      }
+
       const parsed = createBusinessSchema.safeParse({
         name,
         category,
@@ -75,24 +108,19 @@ export default function BusinessForm({
         road_address: roadAddress,
         jibun_address: jibunAddress || null,
         address_detail: addressDetail || null,
-        latitude: isNaN(latNum) ? -999 : latNum,
-        longitude: isNaN(lngNum) ? -999 : lngNum,
+        latitude: hasValidCoordinates ? latitude! : -999,
+        longitude: hasValidCoordinates ? longitude! : -999,
         phone: phone || null,
         website_url: websiteUrl || null,
         registration_number: registrationNumber || null,
       });
 
-      const errors: Record<string, string> = {};
-      if (isNaN(latNum)) {
-        errors.latitude = "유효한 위도 숫자를 입력해 주세요.";
-      }
-      if (isNaN(lngNum)) {
-        errors.longitude = "유효한 경도 숫자를 입력해 주세요.";
-      }
-
       if (!parsed.success) {
         for (const issue of parsed.error.issues) {
           const path = issue.path[0]?.toString() ?? "general";
+          if ((path === "latitude" || path === "longitude") && !hasValidCoordinates) {
+            continue;
+          }
           if (!errors[path]) {
             errors[path] = issue.message;
           }
@@ -109,9 +137,11 @@ export default function BusinessForm({
       if (!isApproved) {
         if (!name.trim()) errors.name = "가게명을 입력해 주세요.";
         if (!category.trim()) errors.category = "업종을 입력해 주세요.";
-        if (!roadAddress.trim()) errors.road_address = "도로명주소를 입력해 주세요.";
-        if (isNaN(latNum)) errors.latitude = "유효한 위도 숫자를 입력해 주세요.";
-        if (isNaN(lngNum)) errors.longitude = "유효한 경도 숫자를 입력해 주세요.";
+        if (!roadAddress.trim()) errors.road_address = "주소 검색을 통해 도로명주소를 선택해 주세요.";
+        if (!hasValidCoordinates) {
+          errors.coordinates =
+            "주소 검색을 통해 도로명주소 또는 지번주소를 선택해 위치를 확정해 주세요.";
+        }
       }
 
       if (Object.keys(errors).length > 0) {
@@ -136,10 +166,11 @@ export default function BusinessForm({
 
     try {
       const idempotencyKey = crypto.randomUUID();
-      const latNum = parseFloat(latitude);
-      const lngNum = parseFloat(longitude);
 
       if (mode === "create") {
+        if (!hasValidCoordinates) {
+          throw new Error("주소 검색을 통해 위치를 선택해 주세요.");
+        }
         const res = await fetch("/api/v1/merchant/businesses", {
           method: "POST",
           headers: {
@@ -153,8 +184,8 @@ export default function BusinessForm({
             road_address: roadAddress.trim(),
             jibun_address: jibunAddress.trim() || null,
             address_detail: addressDetail.trim() || null,
-            latitude: latNum,
-            longitude: lngNum,
+            latitude: latitude!,
+            longitude: longitude!,
             phone: phone.trim() || null,
             website_url: websiteUrl.trim() || null,
             registration_number: registrationNumber.trim() || null,
@@ -186,13 +217,16 @@ export default function BusinessForm({
         };
 
         if (!isApproved) {
+          if (!hasValidCoordinates) {
+            throw new Error("주소 검색을 통해 위치를 선택해 주세요.");
+          }
           payload.name = name.trim();
           payload.category = category.trim();
           payload.road_address = roadAddress.trim();
           payload.jibun_address = jibunAddress.trim() || null;
           payload.address_detail = addressDetail.trim() || null;
-          payload.latitude = latNum;
-          payload.longitude = lngNum;
+          payload.latitude = latitude!;
+          payload.longitude = longitude!;
         }
 
         const res = await fetch(`/api/v1/merchant/businesses/${initialData.id}`, {
@@ -402,122 +436,36 @@ export default function BusinessForm({
       <section className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-900/60">
         <h2 className="text-sm font-bold text-slate-900 dark:text-white">가게 위치 및 주소</h2>
 
-        {/* 도로명주소 */}
-        <div>
-          <label htmlFor="biz-road-address" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-            도로명주소 <span className="text-rose-500">*</span>
+        <AddressSearchField
+          roadAddress={roadAddress}
+          jibunAddress={jibunAddress}
+          hasCoordinates={hasValidCoordinates}
+          disabled={isReadOnly || isApproved}
+          showJibunAddress={true}
+          roadAddressInputId="biz-road-address"
+          jibunAddressInputId="biz-jibun-address"
+          roadAddressError={fieldErrors.road_address}
+          coordinatesError={fieldErrors.coordinates}
+          onSelectAddress={handleSelectAddress}
+          addressSearchFn={addressSearchFn}
+        />
+
+        {/* 상세주소 (별도 입력) */}
+        <div className="min-w-0">
+          <label htmlFor="biz-address-detail" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+            상세주소 (층·호수 등, 선택)
           </label>
           <input
-            id="biz-road-address"
-            name="road_address"
+            id="biz-address-detail"
+            name="address_detail"
             type="text"
-            required
             disabled={isReadOnly || isApproved}
-            value={roadAddress}
-            onChange={(e) => setRoadAddress(e.target.value)}
-            placeholder="예: 경기도 수원시 팔달구 매산로 1"
-            maxLength={200}
-            className={`mt-1 flex min-h-[44px] w-full rounded-xl border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 dark:bg-slate-800 dark:text-white dark:disabled:bg-slate-900 ${
-              fieldErrors.road_address ? "border-rose-400" : "border-slate-300 dark:border-slate-700"
-            }`}
+            value={addressDetail}
+            onChange={(e) => setAddressDetail(e.target.value)}
+            placeholder="예: 1층 101호"
+            maxLength={100}
+            className="mt-1 flex min-h-[44px] w-full min-w-0 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:disabled:bg-slate-900"
           />
-          {fieldErrors.road_address && (
-            <p className="mt-1 text-xs text-rose-500">{fieldErrors.road_address}</p>
-          )}
-        </div>
-
-        {/* 지번주소 / 상세주소 */}
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <div className="min-w-0">
-            <label htmlFor="biz-jibun-address" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-              지번주소 (선택)
-            </label>
-            <input
-              id="biz-jibun-address"
-              name="jibun_address"
-              type="text"
-              disabled={isReadOnly || isApproved}
-              value={jibunAddress}
-              onChange={(e) => setJibunAddress(e.target.value)}
-              placeholder="예: 매산로1가 18"
-              maxLength={200}
-              className="mt-1 flex min-h-[44px] w-full min-w-0 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:disabled:bg-slate-900"
-            />
-          </div>
-          <div className="min-w-0">
-            <label htmlFor="biz-address-detail" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-              상세주소 (선택)
-            </label>
-            <input
-              id="biz-address-detail"
-              name="address_detail"
-              type="text"
-              disabled={isReadOnly || isApproved}
-              value={addressDetail}
-              onChange={(e) => setAddressDetail(e.target.value)}
-              placeholder="예: 1층 101호"
-              maxLength={100}
-              className="mt-1 flex min-h-[44px] w-full min-w-0 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:disabled:bg-slate-900"
-            />
-          </div>
-        </div>
-
-        {/* 좌표 입력 */}
-        <div>
-          <label htmlFor="biz-latitude" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-            가게 위치 좌표 (WGS84 위도 / 경도) <span className="text-rose-500">*</span>
-          </label>
-          <div className="mt-1.5 grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <div className="min-w-0">
-              <input
-                id="biz-latitude"
-                aria-label="위도 (Latitude)"
-                name="latitude"
-                type="number"
-                step="any"
-                required
-                disabled={isReadOnly || isApproved}
-                value={latitude}
-                onChange={(e) => setLatitude(e.target.value)}
-                placeholder="위도 (예: 37.5401)"
-                className={`flex min-h-[44px] w-full min-w-0 rounded-xl border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 dark:bg-slate-800 dark:text-white dark:disabled:bg-slate-900 ${
-                  fieldErrors.latitude ? "border-rose-400" : "border-slate-300 dark:border-slate-700"
-                }`}
-              />
-              {fieldErrors.latitude && (
-                <p className="mt-1 text-xs text-rose-500">{fieldErrors.latitude}</p>
-              )}
-            </div>
-            <div className="min-w-0">
-              <input
-                id="biz-longitude"
-                aria-label="경도 (Longitude)"
-                name="longitude"
-                type="number"
-                step="any"
-                required
-                disabled={isReadOnly || isApproved}
-                value={longitude}
-                onChange={(e) => setLongitude(e.target.value)}
-                placeholder="경도 (예: 127.0701)"
-                className={`flex min-h-[44px] w-full min-w-0 rounded-xl border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 dark:bg-slate-800 dark:text-white dark:disabled:bg-slate-900 ${
-                  fieldErrors.longitude ? "border-rose-400" : "border-slate-300 dark:border-slate-700"
-                }`}
-              />
-              {fieldErrors.longitude && (
-                <p className="mt-1 text-xs text-rose-500">{fieldErrors.longitude}</p>
-              )}
-            </div>
-          </div>
-          <div className="mt-2 rounded-lg bg-slate-100/80 p-2.5 text-[11px] leading-relaxed text-slate-600 dark:bg-slate-800/60 dark:text-slate-400">
-            <p className="font-semibold text-slate-700 dark:text-slate-300">📍 좌표 입력 안내</p>
-            <p className="mt-0.5">
-              실제 가게 위치의 위도(-90~90)와 경도(-180~180) 소수점 좌표를 직접 입력해 주세요.
-            </p>
-            <p className="mt-0.5 text-slate-500">
-              ※ 주소 기반 자동 지도 핀 선택 기능은 향후 지도 연동(TASK 15)에서 지원될 예정입니다. 임의의 가짜 좌표 등록을 방지하기 위해 실제 위치를 확인 후 입력해 주세요.
-            </p>
-          </div>
         </div>
       </section>
 
