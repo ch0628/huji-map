@@ -5,7 +5,10 @@ import { cookies } from "next/headers";
 import AppShell from "@/components/layout/AppShell";
 import RestroomDetailClient from "./RestroomDetailClient";
 import { isSupabaseAuthConfigured } from "@/lib/auth";
-import { isE2eMockSessionAllowed } from "@/lib/auth/mock-guard";
+import {
+  isE2eMockEnvironmentEnabled,
+  isE2eMockSessionAllowed,
+} from "@/lib/auth/mock-guard";
 import { createServerClientInstance } from "@/lib/supabase/server";
 import { getPublicRestroomDetail } from "@/lib/restrooms";
 
@@ -25,9 +28,8 @@ export default async function RestroomDetailPage({
     return notFound();
   }
 
-  // Supabase 미설정 환경 대비 (E2E Mock 환경 제외)
-  const isE2eMockEnabled =
-    process.env.ALLOW_E2E_MOCK === "1" && process.env.VERCEL_ENV !== "production";
+  // Supabase 미설정 환경 대비 (E2E Mock 환경 제외 — 공용 보안 가드 사용)
+  const isE2eMockEnabled = isE2eMockEnvironmentEnabled();
 
   if (!isSupabaseAuthConfigured() && !isE2eMockEnabled) {
     return (

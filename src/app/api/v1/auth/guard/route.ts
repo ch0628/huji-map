@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { UserRoleType } from "@/lib/db/types";
+import { isCloudDeploymentRuntime } from "@/lib/auth/mock-guard";
 import {
   AuthGuardError,
   evaluateRouteAccess,
@@ -14,8 +15,8 @@ import {
 const VALID_ROLES: UserRoleType[] = ["customer", "merchant", "admin"];
 
 export async function GET(request: Request) {
-  // Block diagnostic guard endpoint in production deployments
-  if (process.env.VERCEL_ENV === "production") {
+  // Block diagnostic guard endpoint in cloud production/staging deployments (Vercel & Cloud Run)
+  if (isCloudDeploymentRuntime()) {
     return NextResponse.json({ error: "Not Found" }, { status: 404 });
   }
 

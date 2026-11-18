@@ -1,0 +1,123 @@
+# Google Cloud Build -> Artifact Registry -> Cloud Run 자동 배포 설정
+# 주의:
+# - 실제 GCP Project ID, Secret 값, 개인 계정을 이 파일에 하드코딩하지 마세요.
+# - NEXT_PUBLIC_* 공개 변수는 트리거 치환 변수(Substitutions)로 전달하고,
+#   서버 전용 비밀키는 Secret Manager(--set-secrets)로만 주입하세요.
+# - AGENTS.md Rule 4: PAYMENT_MODE=live 및 live_ 토스 키는 절대 허용하지 않습니다.
+
+substitutions:
+  _REGION: "asia-northeast3"
+  _AR_REPOSITORY: "hujimap"
+  _SERVICE_NAME: "hujimap-staging"
+  _RUN_SERVICE_ACCOUNT: ""
+  _PAYMENT_MODE: "disabled"
+  _APP_URL: ""
+  _ALLOWED_APP_HOSTS: ""
+  _NEXT_PUBLIC_APP_URL: ""
+  _NEXT_PUBLIC_SUPABASE_URL: ""
+  _NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ""
+  _NEXT_PUBLIC_SUPABASE_ANON_KEY: ""
+  _NEXT_PUBLIC_KAKAO_MAP_JS_KEY: ""
+  _NEXT_PUBLIC_TOSS_TEST_CLIENT_KEY: ""
+  _NEXT_PUBLIC_ANALYTICS_ENABLED: "false"
+  _SECRET_SUPABASE_SECRET_KEY: "hujimap-supabase-secret-key"
+  _SECRET_TOSS_TEST_SECRET_KEY: "hujimap-toss-test-secret-key"
+  _SECRET_PIN_ENCRYPTION_KEY_BASE64: "hujimap-pin-encryption-key"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  # 1. 배포 전 보안 가드 (실결제 모드 및 live_ 키 차단, 비밀키 로그 출력 금지)
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    id: "validate-config"
+    entrypoint: "bash"
+    args:
+      - "-ceu"
+      - |
+        if [[ "${_PAYMENT_MODE}" != "disabled" && "${_PAYMENT_MODE}" != "test" ]]; then
+          echo "ERROR: _PAYMENT_MODE must be 'disabled' or 'test'. 'live' is strictly forbidden." >&2
+          exit 1
+        fi
+        if [[ "${_NEXT_PUBLIC_TOSS_TEST_CLIENT_KEY}" == live_* ]]; then
+          echo "ERROR: _NEXT_PUBLIC_TOSS_TEST_CLIENT_KEY must not start with 'live_'." >&2
+          exit 1
+        fi
+        if [[ -z "${_NEXT_PUBLIC_SUPABASE_URL}" ]]; then
+          echo "WARNING: _NEXT_PUBLIC_SUPABASE_URL is empty at build time." >&2
+        fi
+        echo "Config validation passed (PAYMENT_MODE=${_PAYMENT_MODE})."
+
+  # 2. Docker 이미지 빌드 (공개 NEXT_PUBLIC_* 변수만 build-arg로 전달)
+  - name: "gcr.io/cloud-builders/docker"
+    id: "build-image"
+    args:
+      - "build"
+      - "--build-arg"
+      - "NEXT_PUBLIC_APP_URL=${_NEXT_PUBLIC_APP_URL}"
+      - "--build-arg"
+      - "NEXT_PUBLIC_SUPABASE_URL=${_NEXT_PUBLIC_SUPABASE_URL}"
+      - "--build-arg"
+      - "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=${_NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY}"
+      - "--build-arg"
+      - "NEXT_PUBLIC_SUPABASE_ANON_KEY=${_NEXT_PUBLIC_SUPABASE_ANON_KEY}"
+      - "--build-arg"
+      - "NEXT_PUBLIC_KAKAO_MAP_JS_KEY=${_NEXT_PUBLIC_KAKAO_MAP_JS_KEY}"
+      - "--build-arg"
+      - "NEXT_PUBLIC_TOSS_TEST_CLIENT_KEY=${_NEXT_PUBLIC_TOSS_TEST_CLIENT_KEY}"
+      - "--build-arg"
+      - "NEXT_PUBLIC_ANALYTICS_ENABLED=${_NEXT_PUBLIC_ANALYTICS_ENABLED}"
+      - "-t"
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPOSITORY}/${_SERVICE_NAME}:${COMMIT_SHA}"
+      - "-t"
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPOSITORY}/${_SERVICE_NAME}:latest"
+      - "."
+
+  # 3. Artifact Registry에 이미지 Push (Cloud Run 배포 전 원격 레지스트리 등록 필수)
+  - name: "gcr.io/cloud-builders/docker"
+    id: "push-image"
+    args:
+      - "push"
+      - "--all-tags"
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPOSITORY}/${_SERVICE_NAME}"
+
+  # 4. Cloud Run 새 Revision 배포 (기존 서비스 URL 및 IAM 공개 설정 유지)
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    id: "deploy-cloud-run"
+    entrypoint: "bash"
+    args:
+      - "-ceu"
+      - |
+        ENV_VARS="PAYMENT_MODE=${_PAYMENT_MODE}@NEXT_PUBLIC_ANALYTICS_ENABLED=${_NEXT_PUBLIC_ANALYTICS_ENABLED}"
+        if [[ -n "${_APP_URL}" ]]; then
+          ENV_VARS="${ENV_VARS}@APP_URL=${_APP_URL}"
+        fi
+        if [[ -n "${_ALLOWED_APP_HOSTS}" ]]; then
+          ENV_VARS="${ENV_VARS}@ALLOWED_APP_HOSTS=${_ALLOWED_APP_HOSTS}"
+        fi
+
+        DEPLOY_ARGS=(
+          run deploy "${_SERVICE_NAME}"
+          "--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPOSITORY}/${_SERVICE_NAME}:${COMMIT_SHA}"
+          "--region=${_REGION}"
+          "--platform=managed"
+          "--port=8080"
+          "--cpu=1"
+          "--memory=1Gi"
+          "--min-instances=0"
+          "--max-instances=2"
+          "--cpu-throttling"
+          "--update-env-vars=^@^${ENV_VARS}"
+          "--set-secrets=SUPABASE_SECRET_KEY=${_SECRET_SUPABASE_SECRET_KEY}:latest,TOSS_TEST_SECRET_KEY=${_SECRET_TOSS_TEST_SECRET_KEY}:latest,PIN_ENCRYPTION_KEY_BASE64=${_SECRET_PIN_ENCRYPTION_KEY_BASE64}:latest"
+          "--quiet"
+        )
+
+        if [[ -n "${_RUN_SERVICE_ACCOUNT}" ]]; then
+          DEPLOY_ARGS+=("--service-account=${_RUN_SERVICE_ACCOUNT}")
+        fi
+
+        gcloud "${DEPLOY_ARGS[@]}"
+
+images:
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPOSITORY}/${_SERVICE_NAME}:${COMMIT_SHA}"
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPOSITORY}/${_SERVICE_NAME}:latest"
