@@ -2,6 +2,7 @@
 
 import React from "react";
 import Link from "next/link";
+import { formatDistance } from "@/lib/maps/geo";
 import type {
   PublicRestroomSummary,
   AccessMethod,
@@ -17,6 +18,8 @@ export interface PublicRestroomCardProps {
   readonly onPaymentClick?: (restroom: PublicRestroomSummary) => void;
   readonly onDetailClick?: (restroom: PublicRestroomSummary) => void;
   readonly showDetailLink?: boolean;
+  /** 탐색 기준점으로부터의 거리(m) */
+  readonly distanceMeters?: number;
 }
 
 const GENDER_LABELS: Record<GenderType, string> = {
@@ -42,6 +45,7 @@ export default function PublicRestroomCard({
   onPaymentClick,
   onDetailClick,
   showDetailLink = true,
+  distanceMeters,
 }: PublicRestroomCardProps) {
   const isPartner = restroom.type === "partner";
 
@@ -95,6 +99,7 @@ export default function PublicRestroomCard({
             {restroom.road_address}
             {restroom.address_detail ? ` ${restroom.address_detail}` : ""}
           </p>
+          {distanceMeters !== undefined && (<p data-testid={`restroom-distance-${restroom.id}`} className="mt-0.5 text-xs font-semibold text-blue-700 dark:text-blue-300">📍 {formatDistance(distanceMeters)}</p>)}
         </div>
       </div>
 

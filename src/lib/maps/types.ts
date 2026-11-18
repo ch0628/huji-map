@@ -30,6 +30,8 @@ export interface MarkerOptions {
   /** 화장실 유형별 시각적 구분 (public: 공공, partner: 제휴) */
   readonly type?: "public" | "partner" | "current_location" | "default";
   readonly zIndex?: number;
+  /** 선택된 마커 강조 표시 */
+  readonly selected?: boolean;
   readonly onClick?: (markerId: string) => void;
 }
 

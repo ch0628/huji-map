@@ -24,6 +24,10 @@ declare global {
         Size: new (width: number, height: number) => any;
         Point: new (x: number, y: number) => any;
         CustomOverlay: new (options: any) => any;
+        services?: {
+          Places: new () => any;
+          Status: { OK: string; ZERO_RESULT: string; ERROR: string };
+        };
         event: {
           addListener: (target: any, type: string, handler: (...args: any[]) => void) => void;
           removeListener: (target: any, type: string, handler: (...args: any[]) => void) => void;
@@ -133,7 +137,7 @@ export function loadKakaoMapSdk(apiKey?: string): Promise<typeof window.kakao> {
     script.async = true;
     script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(
       resolvedApiKey
-    )}&autoload=false`;
+    )}&libraries=services&autoload=false`;
 
     script.addEventListener("load", onScriptLoadSuccess, { once: true });
     script.addEventListener("error", onScriptError, { once: true });

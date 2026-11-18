@@ -17,6 +17,7 @@ import {
   MarkerOptions,
   isValidLatLng,
 } from "./types";
+import { getMarkerIcon } from "./marker-icons";
 import { isKakaoSdkLoaded, loadKakaoMapSdk } from "./kakao-sdk";
 
 interface ManagedMarker {
@@ -197,6 +198,16 @@ export class KakaoMapProvider implements MapProvider {
       title: options.title,
       zIndex: options.zIndex ?? 1,
     };
+
+    const icon = getMarkerIcon(options.type, options.selected === true);
+    if (icon && window.kakao!.maps!.MarkerImage && window.kakao!.maps!.Size && window.kakao!.maps!.Point) {
+      const maps = window.kakao!.maps!;
+      markerParams.image = new maps.MarkerImage(
+        icon.src,
+        new maps.Size(icon.width, icon.height),
+        { offset: new maps.Point(icon.anchorX, icon.anchorY) }
+      );
+    }
 
     const markerInstance = new window.kakao!.maps!.Marker(markerParams);
 

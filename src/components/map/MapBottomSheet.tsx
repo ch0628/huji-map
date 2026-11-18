@@ -16,6 +16,10 @@ export interface MapBottomSheetProps {
   readonly onToggleExpand: () => void;
   readonly isLoading?: boolean;
   readonly searchKeyword?: string;
+  /** 화장실 id → 기준점으로부터의 거리(m) */
+  readonly distancesById?: Readonly<Record<string, number>>;
+  /** 정렬 기준 설명 (예: "수원역 기준 가까운 순") */
+  readonly sortBasisLabel?: string;
 }
 
 export default function MapBottomSheet({
@@ -29,7 +33,8 @@ export default function MapBottomSheet({
   isExpanded,
   onToggleExpand,
   isLoading = false,
-  searchKeyword,
+  distancesById,
+  sortBasisLabel,
 }: MapBottomSheetProps) {
   // 1. 단일 화장실이 선택된 경우 -> 상세 정보 카드 모드
   if (selectedRestroom) {
@@ -53,6 +58,7 @@ export default function MapBottomSheet({
           <PublicRestroomCard
             restroom={selectedRestroom}
             isSelected={true}
+            distanceMeters={distancesById?.[selectedRestroom.id]}
             onDirectionsClick={onDirectionsClick}
             onPaymentClick={onPaymentClick}
             onDetailClick={onDetailClick}
@@ -83,8 +89,6 @@ export default function MapBottomSheet({
                 ? "화장실 정보 불러오는 중..."
                 : restrooms.length > 0
                 ? `이 지역 화장실 ${restrooms.length}곳`
-                : searchKeyword
-                ? `"${searchKeyword}" 검색 결과 없음`
                 : "이 지역에 등록된 화장실 없음"}
             </span>
           </div>
@@ -105,6 +109,14 @@ export default function MapBottomSheet({
             data-testid="bottom-sheet-expanded-content"
             className="max-h-[50vh] overflow-y-auto p-3 border-t border-slate-100 dark:border-slate-800 space-y-2.5"
           >
+            {sortBasisLabel && restrooms.length > 0 && (
+              <p
+                data-testid="bottom-sheet-sort-basis"
+                className="text-[11px] font-medium text-slate-500 dark:text-slate-400"
+              >
+                {sortBasisLabel}
+              </p>
+            )}
             {restrooms.length === 0 ? (
               <div
                 data-testid="bottom-sheet-empty-state"
@@ -124,6 +136,7 @@ export default function MapBottomSheet({
                   key={restroom.id}
                   restroom={restroom}
                   compact={true}
+                  distanceMeters={distancesById?.[restroom.id]}
                   onCardClick={onSelectRestroom}
                   onDirectionsClick={onDirectionsClick}
                   onPaymentClick={onPaymentClick}

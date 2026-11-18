@@ -14,9 +14,10 @@ export interface AuthFormProps {
 export default function AuthForm({
   mode,
   configReady,
-  returnTo = "/map",
+  returnTo,
 }: AuthFormProps) {
   const router = useRouter();
+  const hasExplicitReturnTo = Boolean(returnTo && returnTo.trim().length > 0);
   const safeReturnTo = sanitizeReturnTo(returnTo);
 
   const emailId = useId();
@@ -57,7 +58,7 @@ export default function AuthForm({
       const parsed = loginSchema.safeParse({
         email,
         password,
-        returnTo: safeReturnTo,
+        ...(hasExplicitReturnTo ? { returnTo: safeReturnTo } : {}),
       });
       if (!parsed.success) {
         const nextErrors: typeof fieldErrors = {};
@@ -107,13 +108,17 @@ export default function AuthForm({
         },
         body: JSON.stringify(
           isLogin
-            ? { email: email.trim(), password, returnTo: safeReturnTo }
+            ? {
+                email: email.trim(),
+                password,
+                ...(hasExplicitReturnTo ? { returnTo: safeReturnTo } : {}),
+              }
             : {
                 email: email.trim(),
                 password,
                 displayName: displayName.trim() || undefined,
                 termsAccepted,
-                returnTo: safeReturnTo,
+                ...(hasExplicitReturnTo ? { returnTo: safeReturnTo } : {}),
               }
         ),
       });
@@ -329,14 +334,22 @@ export default function AuthForm({
       <div className="flex flex-col gap-2.5 text-center text-xs">
         {isLogin ? (
           <Link
-            href={`/signup?returnTo=${encodeURIComponent(safeReturnTo)}`}
+            href={
+              hasExplicitReturnTo
+                ? `/signup?returnTo=${encodeURIComponent(safeReturnTo)}`
+                : "/signup"
+            }
             className="flex min-h-[44px] items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200"
           >
             계정이 없으신가요? 회원가입하기
           </Link>
         ) : (
           <Link
-            href={`/login?returnTo=${encodeURIComponent(safeReturnTo)}`}
+            href={
+              hasExplicitReturnTo
+                ? `/login?returnTo=${encodeURIComponent(safeReturnTo)}`
+                : "/login"
+            }
             className="flex min-h-[44px] items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200"
           >
             이미 계정이 있으신가요? 로그인하기

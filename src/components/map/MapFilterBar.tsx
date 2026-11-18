@@ -7,6 +7,8 @@ export type RestroomFilterType = "all" | "public" | "partner";
 export interface MapFilterBarProps {
   readonly searchKeyword: string;
   readonly onSearchChange: (keyword: string) => void;
+  /** Enter 입력 시 즉시 장소 검색 */
+  readonly onSearchSubmit?: (keyword: string) => void;
   readonly filterType: RestroomFilterType;
   readonly onFilterTypeChange: (type: RestroomFilterType) => void;
   readonly onCurrentLocationClick: () => void;
@@ -18,6 +20,7 @@ export interface MapFilterBarProps {
 export default function MapFilterBar({
   searchKeyword,
   onSearchChange,
+  onSearchSubmit,
   filterType,
   onFilterTypeChange,
   onCurrentLocationClick,
@@ -40,7 +43,14 @@ export default function MapFilterBar({
             type="text"
             value={searchKeyword}
             onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="화장실 이름 또는 주소 검색"
+            placeholder="지역 또는 장소 검색 (예: 수원역, 행궁동)"
+            aria-label="지역 또는 장소 검색"
+            enterKeyHint="search"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                onSearchSubmit?.(searchKeyword);
+              }
+            }}
             data-testid="map-search-input"
             className="w-full rounded-xl border border-slate-300 bg-slate-50/70 py-2.5 pl-9 pr-8 text-xs text-slate-900 placeholder-slate-400 focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500 dark:focus:bg-slate-850"
           />

@@ -3,6 +3,7 @@ import AppShell from "@/components/layout/AppShell";
 import AuthForm from "@/components/auth/AuthForm";
 import AuthStatusBanner from "@/components/auth/AuthStatusBanner";
 import {
+  getDefaultRouteForRoles,
   getServerAuthSession,
   recordQaAuthEvent,
   sanitizeReturnTo,
@@ -29,11 +30,12 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
     ? resolvedParams.reason[0]
     : resolvedParams.reason;
 
-  const bannerReturnTo = sanitizeReturnTo(rawReturnTo);
-  // If user opened /login directly without a specific returnTo, stay on /login after sign-in
-  // so authenticated status banner, refresh verification, and logout action are immediately accessible.
-  const formReturnTo = rawReturnTo ? sanitizeReturnTo(rawReturnTo) : "/login";
   const session = await getServerAuthSession();
+  const explicitReturnTo = rawReturnTo ? sanitizeReturnTo(rawReturnTo) : undefined;
+  const bannerReturnTo =
+    explicitReturnTo ??
+    (session.user ? getDefaultRouteForRoles(session.roles) : "/map");
+  const formReturnTo = explicitReturnTo;
 
   if (session.user) {
     recordQaAuthEvent({

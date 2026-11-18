@@ -218,6 +218,55 @@ export default function AuthStatusBanner({
               {isLoggingOut ? "로그아웃 중..." : "로그아웃"}
             </button>
           </div>
+
+          <div className="mt-2.5 flex flex-wrap gap-1.5 pt-2 border-t border-emerald-200/70 dark:border-emerald-800/70">
+            <Link
+              href="/map"
+              className="inline-flex min-h-[36px] items-center rounded-lg bg-white/80 px-2.5 py-1 text-[11px] font-medium text-emerald-900 hover:bg-white dark:bg-slate-900/70 dark:text-emerald-200"
+            >
+              화장실 지도
+            </Link>
+            {roles.includes("admin") && (
+              <Link
+                href="/admin"
+                className="inline-flex min-h-[36px] items-center rounded-lg bg-white/80 px-2.5 py-1 text-[11px] font-medium text-emerald-900 hover:bg-white dark:bg-slate-900/70 dark:text-emerald-200"
+              >
+                관리자 대시보드
+              </Link>
+            )}
+            {roles.includes("merchant") && (
+              <>
+                <Link
+                  href="/merchant/businesses"
+                  className="inline-flex min-h-[36px] items-center rounded-lg bg-white/80 px-2.5 py-1 text-[11px] font-medium text-emerald-900 hover:bg-white dark:bg-slate-900/70 dark:text-emerald-200"
+                >
+                  가게 관리
+                </Link>
+                <Link
+                  href="/merchant/restrooms"
+                  className="inline-flex min-h-[36px] items-center rounded-lg bg-white/80 px-2.5 py-1 text-[11px] font-medium text-emerald-900 hover:bg-white dark:bg-slate-900/70 dark:text-emerald-200"
+                >
+                  화장실 관리
+                </Link>
+              </>
+            )}
+            {!roles.includes("admin") && !roles.includes("merchant") && (
+              <>
+                <Link
+                  href="/my/access"
+                  className="inline-flex min-h-[36px] items-center rounded-lg bg-white/80 px-2.5 py-1 text-[11px] font-medium text-emerald-900 hover:bg-white dark:bg-slate-900/70 dark:text-emerald-200"
+                >
+                  내 이용권
+                </Link>
+                <Link
+                  href="/my/receipts"
+                  className="inline-flex min-h-[36px] items-center rounded-lg bg-white/80 px-2.5 py-1 text-[11px] font-medium text-emerald-900 hover:bg-white dark:bg-slate-900/70 dark:text-emerald-200"
+                >
+                  영수증
+                </Link>
+              </>
+            )}
+          </div>
         </div>
       )}
     </div>

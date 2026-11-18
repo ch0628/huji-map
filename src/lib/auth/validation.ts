@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { UserRoleType } from "@/lib/db/types";
 
 export const loginSchema = z.object({
   email: z
@@ -55,6 +56,20 @@ export function sanitizeReturnTo(returnTo?: string | null): string {
     return "/map";
   }
   return trimmed;
+}
+
+/**
+ * Returns the primary post-login destination for a user's server-verified roles
+ * when no explicit internal `returnTo` path was requested.
+ */
+export function getDefaultRouteForRoles(roles: readonly UserRoleType[]): string {
+  if (roles.includes("admin")) {
+    return "/admin";
+  }
+  if (roles.includes("merchant")) {
+    return "/merchant/businesses";
+  }
+  return "/map";
 }
 
 /**

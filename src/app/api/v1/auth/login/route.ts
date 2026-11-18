@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createServerClientInstance } from "@/lib/supabase/server";
 import {
   checkIdempotencyKey,
+  getDefaultRouteForRoles,
   isSupabaseAuthConfigured,
   loginSchema,
   recordQaAuthEvent,
@@ -141,7 +142,12 @@ export async function POST(request: Request) {
 
     const roles = await getUserRoles(supabase, data.user.id);
     const effectiveRoles = roles.length > 0 ? roles : (["customer"] as const);
-    const redirectTo = sanitizeReturnTo(parsed.data.returnTo);
+    const hasExplicitReturnTo =
+      typeof parsed.data.returnTo === "string" &&
+      parsed.data.returnTo.trim().length > 0;
+    const redirectTo = hasExplicitReturnTo
+      ? sanitizeReturnTo(parsed.data.returnTo)
+      : getDefaultRouteForRoles(effectiveRoles);
 
     recordQaAuthEvent({
       type: "login_success",
