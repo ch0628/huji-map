@@ -27,6 +27,7 @@ vi.mock("next/headers", () => ({
 }));
 
 const mockSignInWithPassword = vi.fn();
+const mockSignUp = vi.fn();
 const mockCreateServerClientInstance = vi.fn();
 const mockGetUserRoles = vi.fn();
 
@@ -67,6 +68,7 @@ import HomePage from "@/app/page";
 import AdminDashboardPage from "@/app/admin/page";
 import { getDefaultRouteForRoles } from "@/lib/auth/validation";
 import { POST as loginPost } from "@/app/api/v1/auth/login/route";
+import { POST as signupPost } from "@/app/api/v1/auth/signup/route";
 import { clearIdempotencyStoreForTests } from "@/lib/auth/validation";
 
 describe("작업 B: 인증·역할별 진입 흐름 및 내비게이션", () => {
@@ -169,6 +171,61 @@ describe("작업 B: 인증·역할별 진입 흐름 및 내비게이션", () => 
       );
       expect(unsafeRes.status).toBe(200);
       expect((await unsafeRes.json()).redirectTo).toBe("/map");
+    });
+
+    it("연속된 정상 회원가입이 전역 1회 제한 없이 허용되고 기본 customer 역할을 반환한다", async () => {
+      mockCreateServerClientInstance.mockResolvedValue({
+        auth: {
+          signUp: mockSignUp,
+        },
+      });
+      mockSignUp
+        .mockResolvedValueOnce({
+          data: { user: { id: "u-new-1" }, session: {} },
+          error: null,
+        })
+        .mockResolvedValueOnce({
+          data: { user: { id: "u-new-2" }, session: {} },
+          error: null,
+        });
+
+      const res1 = await signupPost(
+        new Request("http://localhost/api/v1/auth/signup", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-idempotency-key": "signup-1",
+          },
+          body: JSON.stringify({
+            email: "first.qa@hujimap.test",
+            password: "Password1234!",
+            termsAccepted: true,
+          }),
+        })
+      );
+      expect(res1.status).toBe(201);
+      const body1 = await res1.json();
+      expect(body1.ok).toBe(true);
+      expect(body1.user.roles).toEqual(["customer"]);
+
+      const res2 = await signupPost(
+        new Request("http://localhost/api/v1/auth/signup", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-idempotency-key": "signup-2",
+          },
+          body: JSON.stringify({
+            email: "second.qa@hujimap.test",
+            password: "Password1234!",
+            termsAccepted: true,
+          }),
+        })
+      );
+      expect(res2.status).toBe(201);
+      const body2 = await res2.json();
+      expect(body2.ok).toBe(true);
+      expect(body2.user.roles).toEqual(["customer"]);
     });
   });
 

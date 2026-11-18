@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { createServerClientInstance } from "@/lib/supabase/server";
 import {
   checkIdempotencyKey,
-  getQaAuthVerificationSummary,
   isSupabaseAuthConfigured,
   recordQaAuthEvent,
   sanitizeReturnTo,
@@ -71,21 +70,6 @@ export async function POST(request: Request) {
         },
       },
       { status: 503 }
-    );
-  }
-
-  // Enforce single QA test account creation cap when in QA session
-  if (getQaAuthVerificationSummary().signupSucceededCount >= 1) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: {
-          code: "QA_SIGNUP_LIMIT_REACHED",
-          message:
-            "QA 테스트 계정이 이미 1건 생성되었습니다. 추가 계정을 생성하지 않고 로그인 화면에서 로그인해 주세요.",
-        },
-      },
-      { status: 429 }
     );
   }
 
