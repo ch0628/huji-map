@@ -1861,6 +1861,185 @@ describe("TASK 10 — Catalog API Validation & Services", () => {
         );
         expect(result.items).toEqual([]);
       }
+
+      // 5) approved partner business name search & whitespace-normalized partner restroom name search
+      {
+        const approvedJinmiBizId = "b2000000-0000-4000-8000-000000000002";
+        const pendingBizId = "b3000000-0000-4000-8000-000000000003";
+        const customRows = [
+          {
+            id: "r3000000-0000-4000-8000-000000000003",
+            type: "partner",
+            name: "1층 손님용 화장실",
+            road_address: "경기 수원시 팔달구 정조로800번길 21",
+            address_detail: null,
+            latitude: 37.27966,
+            longitude: 127.0181,
+            access_method: "pin",
+            gender_type: "separate",
+            wheelchair_accessible: false,
+            baby_changing_available: false,
+            sanitary_products_available: false,
+            last_verified_at: null,
+            business_id: approvedJinmiBizId,
+            publication_status: "published",
+          },
+          {
+            id: "r4000000-0000-4000-8000-000000000004",
+            type: "partner",
+            name: "진미 통닭",
+            road_address: "경기 수원시 팔달구 정조로800번길 21",
+            address_detail: null,
+            latitude: 37.27966,
+            longitude: 127.0181,
+            access_method: "pin",
+            gender_type: "separate",
+            wheelchair_accessible: false,
+            baby_changing_available: false,
+            sanitary_products_available: false,
+            last_verified_at: null,
+            business_id: approvedJinmiBizId,
+            publication_status: "published",
+          },
+          {
+            id: "r5000000-0000-4000-8000-000000000005",
+            type: "partner",
+            name: "진미통닭 비공개초안",
+            road_address: "경기 수원시 팔달구 정조로800번길 21",
+            address_detail: null,
+            latitude: 37.27966,
+            longitude: 127.0181,
+            access_method: "pin",
+            gender_type: "separate",
+            wheelchair_accessible: false,
+            baby_changing_available: false,
+            sanitary_products_available: false,
+            last_verified_at: null,
+            business_id: approvedJinmiBizId,
+            publication_status: "draft",
+          },
+          {
+            id: "r6000000-0000-4000-8000-000000000006",
+            type: "partner",
+            name: "진미통닭 미승인가게",
+            road_address: "경기 수원시 팔달구 정조로800번길 22",
+            address_detail: null,
+            latitude: 37.27967,
+            longitude: 127.0182,
+            access_method: "pin",
+            gender_type: "separate",
+            wheelchair_accessible: false,
+            baby_changing_available: false,
+            sanitary_products_available: false,
+            last_verified_at: null,
+            business_id: pendingBizId,
+            publication_status: "published",
+          },
+        ];
+
+        const makePartnerSearchClient = () => ({
+          from: vi.fn((table: string) => {
+            if (table === "restrooms") {
+              let pubFilter: string | null = null;
+              let typeFilter: string | null = null;
+              let ilikePat: string | null = null;
+              const chain: any = {
+                select: vi.fn().mockReturnThis(),
+                eq: vi.fn((col: string, val: string) => {
+                  if (col === "publication_status") pubFilter = val;
+                  if (col === "type") typeFilter = val;
+                  return chain;
+                }),
+                not: vi.fn().mockReturnThis(),
+                ilike: vi.fn((_col: string, pat: string) => {
+                  ilikePat = pat;
+                  return chain;
+                }),
+                order: vi.fn().mockReturnThis(),
+                limit: vi.fn(() => {
+                  const needle = (ilikePat ?? "").replace(/%/g, "").toLowerCase();
+                  const data = customRows.filter((r) => {
+                    if (pubFilter && r.publication_status !== pubFilter) return false;
+                    if (typeFilter && r.type !== typeFilter) return false;
+                    if (needle && !r.name.toLowerCase().includes(needle)) return false;
+                    return true;
+                  });
+                  return Promise.resolve({ data, error: null });
+                }),
+              };
+              return chain;
+            }
+            return {
+              select: vi.fn().mockReturnThis(),
+              in: vi.fn().mockReturnThis(),
+              eq: vi.fn().mockReturnThis(),
+              then: (resolve: any) => Promise.resolve({ data: [], error: null }).then(resolve),
+            };
+          }),
+        });
+
+        const adminBizList = [
+          {
+            id: approvedJinmiBizId,
+            name: "진미통닭",
+            registration_status: "approved",
+          },
+          {
+            id: pendingBizId,
+            name: "진미통닭 미승인가게",
+            registration_status: "pending",
+          },
+        ];
+
+        const makePartnerAdminClient = () => ({
+          from: vi.fn((table: string) => {
+            if (table !== "businesses") throw new Error("unexpected table");
+            let statusFilter: string | null = null;
+            let inIds: string[] | null = null;
+            const chain: any = {
+              select: vi.fn().mockReturnThis(),
+              eq: vi.fn((col: string, val: string) => {
+                if (col === "registration_status") statusFilter = val;
+                return chain;
+              }),
+              in: vi.fn((_col: string, vals: string[]) => {
+                inIds = vals;
+                return chain;
+              }),
+              then: (resolve: any) => {
+                const data = adminBizList.filter((b) => {
+                  if (statusFilter && b.registration_status !== statusFilter) return false;
+                  if (inIds && !inIds.includes(b.id)) return false;
+                  return true;
+                });
+                return Promise.resolve({ data, error: null }).then(resolve);
+              },
+            };
+            return chain;
+          }),
+        });
+
+        // Enabled: searching "진미통닭" finds both approved restroom ("1층 손님용 화장실") via business name
+        // and space-separated restroom ("진미 통닭"), while strictly excluding draft & pending business.
+        const enabledRes = await searchPublicRestroomsByName(
+          makePartnerSearchClient() as any,
+          { q: "진미통닭", type: "all", limit: 10 },
+          { businessClient: makePartnerAdminClient() as any, partnerDiscoveryEnabled: true }
+        );
+        expect(enabledRes.items.map((x) => x.id).sort()).toEqual([
+          "r3000000-0000-4000-8000-000000000003",
+          "r4000000-0000-4000-8000-000000000004",
+        ]);
+        expect(enabledRes.items.every((x) => x.business_name === "진미통닭")).toBe(true);
+
+        // Disabled flag: returns 0 partner restrooms even when business & restroom are approved/published
+        const disabledRes = await searchPublicRestroomsByName(
+          makePartnerSearchClient() as any,
+          { q: "진미통닭", type: "all", limit: 10 },
+          { businessClient: makePartnerAdminClient() as any, partnerDiscoveryEnabled: false }
+        );
+        expect(disabledRes.items).toEqual([]);
+      }
     });
   });
 });

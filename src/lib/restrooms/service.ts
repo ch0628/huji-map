@@ -640,8 +640,14 @@ async function hydratePublicRestroomSummaries(
   });
 }
 
+function normalizeSearchKeyword(value: string): string {
+  return value.replace(/\s+/g, "").toLowerCase();
+}
+
 /**
- * Search publicly visible restrooms by name (for map search integration).
+ * Search publicly visible restrooms by name (for map search integration),
+ * and for approved partner restrooms also matches approved business names and
+ * whitespace-normalized names when `partner_restroom_discovery` is enabled.
  * Strictly excludes draft/pending/suspended/archived restrooms, restrooms without valid coords,
  * partner restrooms of non-approved businesses, and partner restrooms when `partner_restroom_discovery` is disabled.
  */
@@ -651,7 +657,8 @@ export async function searchPublicRestroomsByName(
   options?: PublicCatalogQueryOptions
 ): Promise<SearchPublicRestroomsResult> {
   const trimmed = params.q.trim();
-  if (!trimmed) {
+  const compactQ = normalizeSearchKeyword(trimmed);
+  if (!trimmed || !compactQ) {
     return { items: [], total: 0, limit: params.limit };
   }
 
@@ -684,7 +691,7 @@ export async function searchPublicRestroomsByName(
     query = query.eq("type", "partner");
   }
 
-  const { data: rows, error } = await query
+  const { data: directRows, error } = await query
     .order("name", { ascending: true })
     .limit(fetchLimit);
 
@@ -692,13 +699,65 @@ export async function searchPublicRestroomsByName(
     throw error;
   }
 
-  if (!rows || rows.length === 0) {
+  const mergedRows: any[] = Array.isArray(directRows) ? [...directRows] : [];
+  const seenIds = new Set<string>(mergedRows.map((r) => r?.id).filter(Boolean));
+
+  // For approved partner restrooms, also match whitespace-normalized restroom names
+  // and approved business names (e.g. searching "진미통닭" finds "진미 통닭").
+  if (partnerDiscoveryEnabled && params.type !== "public") {
+    const matchedBizIds = new Set<string>();
+    const bizClient = resolveBusinessClient(supabase, options);
+    const { data: approvedBusinesses, error: bizError } = await (bizClient as any)
+      .from("businesses")
+      .select("id, name, registration_status")
+      .eq("registration_status", "approved");
+
+    if (!bizError && Array.isArray(approvedBusinesses)) {
+      for (const b of approvedBusinesses) {
+        if (
+          b?.id &&
+          (b.registration_status === undefined || b.registration_status === "approved") &&
+          typeof b.name === "string" &&
+          normalizeSearchKeyword(b.name).includes(compactQ)
+        ) {
+          matchedBizIds.add(b.id);
+        }
+      }
+    }
+
+    const { data: partnerRows, error: partnerError } = await (supabase as any)
+      .from("restrooms")
+      .select(PUBLIC_RESTROOM_SUMMARY_COLUMNS)
+      .eq("publication_status", "published")
+      .eq("type", "partner")
+      .not("latitude", "is", null)
+      .not("longitude", "is", null)
+      .order("name", { ascending: true })
+      .limit(200);
+
+    if (!partnerError && Array.isArray(partnerRows)) {
+      for (const r of partnerRows) {
+        if (!r?.id || seenIds.has(r.id)) continue;
+        const nameMatches =
+          typeof r.name === "string" &&
+          normalizeSearchKeyword(r.name).includes(compactQ);
+        const businessMatches =
+          typeof r.business_id === "string" && matchedBizIds.has(r.business_id);
+        if (nameMatches || businessMatches) {
+          seenIds.add(r.id);
+          mergedRows.push(r);
+        }
+      }
+    }
+  }
+
+  if (mergedRows.length === 0) {
     return { items: [], total: 0, limit: params.limit };
   }
 
   const hydrated = await hydratePublicRestroomSummaries(
     supabase,
-    rows,
+    mergedRows,
     partnerDiscoveryEnabled,
     options
   );
