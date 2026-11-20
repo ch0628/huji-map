@@ -66,6 +66,11 @@ export async function GET(request: Request, { params }: RouteParams) {
     );
   } catch (err) {
     if (err instanceof AuthGuardError) {
+      if (err.status >= 500) {
+        console.error(
+          `[GET /api/v1/admin/businesses/[id]] requestId=${requestId} code=${err.safeReasonCode ?? err.code} status=${err.status}`
+        );
+      }
       return NextResponse.json(
         {
           ok: false,
@@ -79,14 +84,15 @@ export async function GET(request: Request, { params }: RouteParams) {
       );
     }
 
-    const message =
-      err instanceof Error ? err.message : "가게 상세 조회 중 오류가 발생했습니다.";
+    console.error(
+      `[GET /api/v1/admin/businesses/[id]] requestId=${requestId} code=UNEXPECTED_ERROR status=500`
+    );
     return NextResponse.json(
       {
         ok: false,
         error: {
           code: "INTERNAL_ERROR",
-          message,
+          message: "가게 상세 조회 중 오류가 발생했습니다.",
         },
         requestId,
       },

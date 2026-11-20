@@ -9,19 +9,28 @@ export type AuthErrorCode =
   | "SESSION_EXPIRED"
   | "FORBIDDEN"
   | "ACCOUNT_SUSPENDED"
-  | "INVALID_INPUT";
+  | "INVALID_INPUT"
+  | "NOT_FOUND"
+  | "INTERNAL_ERROR";
 
 export class AuthGuardError extends Error {
   public readonly code: AuthErrorCode;
   public readonly status: number;
   public readonly userMessage: string;
+  public readonly safeReasonCode?: string;
 
-  constructor(code: AuthErrorCode, status: number, userMessage: string) {
+  constructor(
+    code: AuthErrorCode,
+    status: number,
+    userMessage: string,
+    safeReasonCode?: string
+  ) {
     super(userMessage);
     this.name = "AuthGuardError";
     this.code = code;
     this.status = status;
     this.userMessage = userMessage;
+    this.safeReasonCode = safeReasonCode;
   }
 }
 

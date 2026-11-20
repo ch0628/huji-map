@@ -318,6 +318,49 @@ describe("TASK 08: Business Approval Validation & Admin Services", () => {
       expect(detail.audit_logs).toHaveLength(1);
       expect(detail.my_role).toBe("admin");
     });
+
+    it("throws 404 NOT_FOUND when the target business does not exist", async () => {
+      const mockSupabase = {
+        from: vi.fn(() => ({
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+        })),
+      } as unknown as SupabaseClient<Database>;
+
+      await expect(
+        getBusinessDetailForAdmin(mockSupabase, "07829533-f843-41d9-b6dd-0c2a9d2dcc17")
+      ).rejects.toThrowError(
+        expect.objectContaining({
+          code: "NOT_FOUND",
+          status: 404,
+          userMessage: "가게 정보를 찾을 수 없습니다.",
+        })
+      );
+    });
+
+    it("throws 500 INTERNAL_ERROR (not 404) when Supabase returns Invalid API key", async () => {
+      const mockSupabase = {
+        from: vi.fn(() => ({
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          maybeSingle: vi.fn().mockResolvedValue({
+            data: null,
+            error: { message: "Invalid API key" },
+          }),
+        })),
+      } as unknown as SupabaseClient<Database>;
+
+      await expect(
+        getBusinessDetailForAdmin(mockSupabase, "07829533-f843-41d9-b6dd-0c2a9d2dcc17")
+      ).rejects.toThrowError(
+        expect.objectContaining({
+          code: "INTERNAL_ERROR",
+          status: 500,
+          safeReasonCode: "SUPABASE_AUTH_ERROR",
+        })
+      );
+    });
   });
 
   describe("5. decideBusinessApproval Service (Atomic RPC Invocation)", () => {

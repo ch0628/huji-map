@@ -72,6 +72,18 @@ interface DbErrorLike {
   message?: string;
 }
 
+function isSupabaseAuthGatewayError(error: DbErrorLike | null | undefined): boolean {
+  const code = (error?.code ?? "").toUpperCase();
+  const msg = (error?.message ?? "").toLowerCase();
+  return (
+    code === "PGRST301" ||
+    code === "PGRST302" ||
+    msg.includes("invalid api key") ||
+    msg.includes("invalid compact jws") ||
+    msg.includes("jwt")
+  );
+}
+
 /**
  * Maps database/PostgREST errors to safe, user-facing errors.
  * Never forwards raw database messages (they may contain schema details or user input).
@@ -84,29 +96,32 @@ function mapBusinessDbError(
 
   switch (code) {
     case "28000":
-      return new AuthGuardError("UNAUTHORIZED", 401, "로그인이 필요한 기능입니다.");
+      return new AuthGuardError("UNAUTHORIZED", 401, "로그인이 필요한 기능입니다.", "DB_28000");
     case "42501":
     case "PGRST116":
       return new AuthGuardError(
         "FORBIDDEN",
         403,
-        "해당 가게에 대한 권한이 없거나 수정할 수 없는 상태입니다."
+        "해당 가게에 대한 권한이 없거나 수정할 수 없는 상태입니다.",
+        code
       );
     case "P0002":
-      return new AuthGuardError("INVALID_INPUT", 404, "가게를 찾을 수 없습니다.");
+      return new AuthGuardError("NOT_FOUND", 404, "가게를 찾을 수 없습니다.", "DB_P0002");
     case "HM001":
       return new AuthGuardError(
         "INVALID_INPUT",
         409,
-        "이미 관리자 심사 대기 중인 가게입니다."
+        "이미 관리자 심사 대기 중인 가게입니다.",
+        "HM001"
       );
     case "HM002":
-      return new AuthGuardError("INVALID_INPUT", 409, "이미 승인 완료된 가게입니다.");
+      return new AuthGuardError("INVALID_INPUT", 409, "이미 승인 완료된 가게입니다.", "HM002");
     case "HM003":
       return new AuthGuardError(
         "FORBIDDEN",
         403,
-        "이용 정지 상태의 가게는 심사를 요청할 수 없습니다."
+        "이용 정지 상태의 가게는 심사를 요청할 수 없습니다.",
+        "HM003"
       );
     case "HM005":
       return new AuthGuardError(
@@ -114,13 +129,15 @@ function mapBusinessDbError(
         422,
         fallbackMessage.includes("심사 처리")
           ? "심사 대기 중(pending)인 가게만 승인 또는 반려할 수 있습니다."
-          : "현재 상태에서는 심사를 요청할 수 없습니다."
+          : "현재 상태에서는 심사를 요청할 수 없습니다.",
+        "HM005"
       );
     case "HM006":
       return new AuthGuardError(
         "INVALID_INPUT",
         409,
-        "이미 반려 처리된 가게입니다."
+        "이미 반려 처리된 가게입니다.",
+        "HM006"
       );
     default:
       break;
@@ -131,11 +148,22 @@ function mapBusinessDbError(
     return new AuthGuardError(
       "INVALID_INPUT",
       400,
-      "입력값이 올바르지 않습니다. 입력 내용을 확인해 주세요."
+      "입력값이 올바르지 않습니다. 입력 내용을 확인해 주세요.",
+      `DB_${code}`
     );
   }
 
-  return new AuthGuardError("INVALID_INPUT", 500, fallbackMessage);
+  if (isSupabaseAuthGatewayError(error)) {
+    return new AuthGuardError(
+      "INTERNAL_ERROR",
+      500,
+      "서버 데이터베이스 인증 또는 연결 오류가 발생했습니다.",
+      code ? `SUPABASE_${code}` : "SUPABASE_AUTH_ERROR"
+    );
+  }
+
+  const safeDbCode = /^[A-Za-z0-9_]{1,32}$/.test(code) ? `DB_${code}` : "DB_QUERY_ERROR";
+  return new AuthGuardError("INTERNAL_ERROR", 500, fallbackMessage, safeDbCode);
 }
 
 /**
@@ -674,48 +702,75 @@ export async function getBusinessDetailForAdmin(
     .eq("id", businessId)
     .maybeSingle();
 
-  if (bizError || !business) {
-    throw mapBusinessDbError(bizError, "가게 정보를 찾을 수 없습니다.");
+  if (bizError) {
+    throw mapBusinessDbError(
+      bizError,
+      "가게 상세 조회 중 데이터베이스 오류가 발생했습니다."
+    );
+  }
+
+  if (!business) {
+    throw new AuthGuardError(
+      "NOT_FOUND",
+      404,
+      "가게 정보를 찾을 수 없습니다.",
+      "BUSINESS_NOT_FOUND"
+    );
   }
 
   // 2. Fetch members
-  const { data: members } = await untyped
+  const { data: members, error: membersError } = await untyped
     .from("business_members")
     .select("business_id, user_id, role, membership_status, joined_at")
     .eq("business_id", businessId);
+  if (membersError) {
+    throw mapBusinessDbError(membersError, "가게 소속 멤버 조회 중 오류가 발생했습니다.");
+  }
 
   // 3. Fetch hours
-  const { data: hours } = await untyped
+  const { data: hours, error: hoursError } = await untyped
     .from("business_hours")
     .select("id, business_id, weekday, opens_at, closes_at, is_closed, crosses_midnight")
     .eq("business_id", businessId)
     .order("weekday", { ascending: true });
+  if (hoursError) {
+    throw mapBusinessDbError(hoursError, "가게 영업시간 조회 중 오류가 발생했습니다.");
+  }
 
   // 4. Fetch full verifications (including private fields)
-  const { data: verifications } = await untyped
+  const { data: verifications, error: verifError } = await untyped
     .from("business_verifications")
     .select(BUSINESS_VERIFICATION_ADMIN_COLUMNS)
     .eq("business_id", businessId)
     .order("created_at", { ascending: false });
+  if (verifError) {
+    throw mapBusinessDbError(verifError, "가게 인증 정보 조회 중 오류가 발생했습니다.");
+  }
 
   // 5. Fetch applicant profile
   let applicantProfile: { id: string; display_name: string | null; account_status: string } | null = null;
   if (business.created_by) {
-    const { data: profile } = await untyped
+    const { data: profile, error: profileError } = await untyped
       .from("profiles")
       .select("id, display_name, account_status")
       .eq("id", business.created_by)
       .maybeSingle();
+    if (profileError) {
+      throw mapBusinessDbError(profileError, "신청자 프로필 조회 중 오류가 발생했습니다.");
+    }
     applicantProfile = profile || null;
   }
 
   // 6. Fetch audit logs for this business
-  const { data: auditLogs } = await untyped
+  const { data: auditLogs, error: auditError } = await untyped
     .from("audit_logs")
     .select("id, actor_user_id, action, entity_type, entity_id, before_data, after_data, reason, created_at")
     .eq("entity_type", "businesses")
     .eq("entity_id", businessId)
     .order("created_at", { ascending: false });
+  if (auditError) {
+    throw mapBusinessDbError(auditError, "가게 감사 로그 조회 중 오류가 발생했습니다.");
+  }
 
   return {
     ...(business as Business),

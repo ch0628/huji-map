@@ -10,10 +10,11 @@ import type { Database } from "@/lib/db/types";
  * AGENTS.md Rule 12: Throws a safe configuration error if environment variables are missing.
  */
 export async function createServerClientInstance(): Promise<SupabaseClient<Database>> {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabasePublishableKey =
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const supabasePublishableKey = (
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  )?.trim();
 
   if (!supabaseUrl || !supabasePublishableKey) {
     throw new Error(
@@ -50,10 +51,11 @@ export function isServiceRoleConfigured(): boolean {
   if (typeof window !== "undefined") {
     return false;
   }
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const secretKey =
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const secretKey = (
     process.env.SUPABASE_SECRET_KEY ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY;
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  )?.trim();
   return Boolean(supabaseUrl && secretKey);
 }
 
@@ -67,10 +69,11 @@ export function createAdminClient(): SupabaseClient<Database> {
     throw new Error("SECURITY VIOLATION: createAdminClient cannot be invoked on the client browser.");
   }
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const secretKey =
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const secretKey = (
     process.env.SUPABASE_SECRET_KEY ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY;
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  )?.trim();
 
   if (!supabaseUrl || !secretKey) {
     throw new Error(
