@@ -55,11 +55,22 @@ export interface PublicImportRun {
   error_message: string | null;
 }
 
+export type CoordinateSource =
+  | "gg_publtolt_15011425"
+  | "kakao_geocode"
+  | "partner_kakao_js"
+  | "admin_manual"
+  | "public_csv_original"
+  | "other";
+
 export interface Restroom {
   id: string; // uuid
   business_id: string | null; // uuid referencing businesses(id), required for partner
   source_id: string | null; // uuid referencing public_data_sources(id), required for public
   source_record_id: string | null;
+  coordinate_source?: CoordinateSource | null;
+  coordinate_source_id?: string | null;
+  coordinate_source_record_id?: string | null;
   type: RestroomType;
   name: string;
   description: string | null;
@@ -127,6 +138,8 @@ export interface RestroomPhoto {
   is_primary: boolean;
   moderation_status: PhotoModerationStatus;
   uploaded_by: string | null; // uuid referencing profiles(id)
+  replaces_photo_id?: string | null;
+  image_url?: string | null;
   created_at: string;
 }
 
@@ -152,6 +165,8 @@ export interface PublicRestroomSummary {
   deposit_amount_krw?: number | null;
   access_mode?: AccessMode | null;
   primary_photo_storage_path?: string | null;
+  primary_photo_url?: string | null;
+  distance_meters?: number;
 }
 
 /**
@@ -217,6 +232,7 @@ export interface PublicRestroomPhoto {
   storage_path: string;
   photo_type: RestroomPhotoType;
   is_primary: boolean;
+  image_url?: string | null;
 }
 
 /**

@@ -777,6 +777,116 @@ describe("TASK 10 — Catalog API Validation & Services", () => {
       const draftBiz = await getPublicBusinessDetail(client, bizDraftId);
       expect(draftBiz).toBeNull();
     });
+
+    it("2.9 listPublicRestrooms computes exact consistent total across multiple pages when unapproved partner rows exist on different pages", async () => {
+      const public1 = {
+        ...mockRestrooms[0],
+        id: "11111111-1111-4111-8111-111111111111",
+        name: "공중1",
+      };
+      const suspendedPartner1 = {
+        ...mockRestrooms[2],
+        id: "22222222-2222-4222-8222-222222222222",
+        name: "정지제휴1",
+      };
+      const public2 = {
+        ...mockRestrooms[0],
+        id: "33333333-3333-4333-8333-333333333333",
+        name: "공중2",
+      };
+      const draftBizPartner2 = {
+        ...mockRestrooms[2],
+        id: "44444444-4444-4444-8444-444444444444",
+        business_id: bizDraftId,
+        name: "미승인제휴2",
+      };
+      const approvedPartner = {
+        ...mockRestrooms[1],
+        id: "55555555-5555-4555-8555-555555555555",
+        name: "승인제휴",
+      };
+
+      // Total 5 published rows in DB, only 3 are truly publicly visible (public1, public2, approvedPartner)
+      // Excluded rows sit on Page 1 (suspendedPartner1) AND Page 2 (draftBizPartner2).
+      const client = createMockSupabase({
+        restrooms: [
+          public1,
+          suspendedPartner1,
+          public2,
+          draftBizPartner2,
+          approvedPartner,
+        ] as any[],
+      });
+
+      const page1 = await listPublicRestrooms(client, {
+        bbox: sampleBBox,
+        type: "all",
+        limit: 2,
+        offset: 0,
+      });
+      expect(page1.items.map((x) => x.id)).toEqual([public1.id]);
+      expect(page1.total).toBe(3);
+
+      const page2 = await listPublicRestrooms(client, {
+        bbox: sampleBBox,
+        type: "all",
+        limit: 2,
+        offset: 2,
+      });
+      expect(page2.items.map((x) => x.id)).toEqual([public2.id]);
+      expect(page2.total).toBe(3);
+
+      const page3 = await listPublicRestrooms(client, {
+        bbox: sampleBBox,
+        type: "all",
+        limit: 2,
+        offset: 4,
+      });
+      expect(page3.items.map((x) => x.id)).toEqual([approvedPartner.id]);
+      expect(page3.total).toBe(3);
+    });
+
+    it("2.10 listPublicRestrooms reports exact total on Page 1 even when unapproved partner rows only appear on Page 2", async () => {
+      const public1 = {
+        ...mockRestrooms[0],
+        id: "11111111-1111-4111-8111-111111111111",
+      };
+      const public2 = {
+        ...mockRestrooms[0],
+        id: "22222222-2222-4222-8222-222222222222",
+      };
+      const suspendedOnPage2 = {
+        ...mockRestrooms[2],
+        id: "33333333-3333-4333-8333-333333333333",
+      };
+      const draftOnPage2 = {
+        ...mockRestrooms[2],
+        id: "44444444-4444-4444-8444-444444444444",
+        business_id: bizDraftId,
+      };
+
+      const client = createMockSupabase({
+        restrooms: [public1, public2, suspendedOnPage2, draftOnPage2] as any[],
+      });
+
+      const page1 = await listPublicRestrooms(client, {
+        bbox: sampleBBox,
+        type: "all",
+        limit: 2,
+        offset: 0,
+      });
+      expect(page1.items.map((x) => x.id)).toEqual([public1.id, public2.id]);
+      expect(page1.total).toBe(2);
+
+      const page2 = await listPublicRestrooms(client, {
+        bbox: sampleBBox,
+        type: "all",
+        limit: 2,
+        offset: 2,
+      });
+      expect(page2.items).toEqual([]);
+      expect(page2.total).toBe(2);
+    });
   });
 
   describe("3. HTTP Route Handlers Integration", () => {

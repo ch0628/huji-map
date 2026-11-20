@@ -73,6 +73,11 @@ export interface PublicSourceConfig {
   attributionText?: string | null;
 }
 
+export type GeocodeFatalStopReason =
+  | "quota_exceeded"
+  | "rate_limited"
+  | "auth_error";
+
 export interface GeocodeResult {
   status: "success" | "not_found" | "uncertain" | "error";
   latitude: number | null;
@@ -81,13 +86,72 @@ export interface GeocodeResult {
   addressType?: string | null;
   queryUsed?: string | null;
   reason?: string;
+  fatalStopReason?: GeocodeFatalStopReason;
 }
 
-export type AddressGeocoder = (params: {
+export interface GeocoderStats {
+  date: string;
+  dailyLimit: number;
+  maxCallsPerRun: number | null;
+  todayHttpCalls: number;
+  runHttpCalls: number;
+  remainingDailyQuota: number;
+  cacheHits: number;
+  successCount: number;
+  notFoundCount: number;
+  uncertainCount: number;
+  errorCount: number;
+  rateLimitedCount: number;
+  fatalStopReason: GeocodeFatalStopReason | null;
+}
+
+export type AddressGeocoder = ((params: {
   roadAddress: string;
   jibunAddress: string;
+  agency?: string | null;
   cityFilter?: string | null;
-}) => Promise<GeocodeResult>;
+}) => Promise<GeocodeResult>) & {
+  flushCache?: () => void;
+  flushUsage?: () => void;
+  getStats?: () => GeocoderStats;
+};
+
+export interface ImportCheckpoint {
+  version: 1;
+  fileSha256: string;
+  cityFilter: string | null;
+  batchSize: number;
+  totalValidRecords: number;
+  nextIndex: number;
+  status: "in_progress" | "paused" | "interrupted" | "completed";
+  stoppedReason: string | null;
+  stats: {
+    insertedCount: number;
+    updatedCount: number;
+    skippedCount: number;
+    skippedUnlocatedNewCount: number;
+    preservedExistingCount: number;
+    geocodeSuccessCount: number;
+    geocodeFailedCount: number;
+    errorCount: number;
+  };
+  updatedAt: string;
+}
+
+export interface BatchProgress {
+  batchIndex: number;
+  totalBatches: number;
+  processedRecords: number;
+  totalValidRecords: number;
+  insertedCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  skippedUnlocatedNewCount: number;
+  geocodeSuccessCount: number;
+  geocodeFailedCount: number;
+  runHttpCalls: number;
+  todayHttpCalls: number;
+}
 
 export interface ImportOptions {
   sourceConfig?: Partial<PublicSourceConfig>;
@@ -95,6 +159,12 @@ export interface ImportOptions {
   batchSize?: number;
   cityFilter?: string | null;
   preserveAdminStatus?: boolean;
+  skipUnlocatedNew?: boolean;
+  regeocodeExisting?: boolean;
+  checkpointPath?: string | null;
+  resume?: boolean;
+  signal?: AbortSignal;
+  onBatchProgress?: (progress: BatchProgress) => void;
   geocoder?: AddressGeocoder;
   geocodeConcurrency?: number;
 }
@@ -108,12 +178,14 @@ export interface ImportErrorDetail {
 export interface ImportRunResult {
   runId: string;
   sourceId: string;
-  status: "success" | "failed";
+  status: "success" | "failed" | "paused";
   fetchedCount: number;
   cityMatchedCount?: number;
   duplicateCount?: number;
   geocodeSuccessCount?: number;
   geocodeFailedCount?: number;
+  skippedUnlocatedNewCount?: number;
+  preservedExistingCount?: number;
   publishedCount?: number;
   draftCount?: number;
   insertedCount: number;
@@ -124,6 +196,11 @@ export interface ImportRunResult {
   startedAt: string;
   finishedAt: string;
   errorMessage?: string | null;
+  stoppedReason?: string | null;
+  resumedFromIndex?: number;
+  nextIndex?: number;
+  totalValidRecords?: number;
+  geocodeStats?: GeocoderStats | null;
 }
 
 /**

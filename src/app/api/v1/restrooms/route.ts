@@ -50,6 +50,9 @@ export async function GET(request: Request) {
     const supabase = await createServerClientInstance();
     const result = await listPublicRestrooms(supabase, {
       bbox: parsed.data.bbox,
+      centerLat: parsed.data.centerLat,
+      centerLng: parsed.data.centerLng,
+      radiusM: parsed.data.radiusM,
       type: parsed.data.type,
       limit: parsed.data.limit,
       offset: parsed.data.offset,

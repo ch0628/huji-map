@@ -362,22 +362,61 @@ export const restroomPhotoSchema = z.object({
     .default("pending"),
 });
 
+export const MAX_NEARBY_RADIUS_M = 400;
+export const DEFAULT_NEARBY_RADIUS_M = 400;
+export const DEFAULT_BBOX_LIMIT = 50;
+export const DEFAULT_NEARBY_LIMIT = 100;
+export const MAX_CATALOG_LIMIT = 100;
+
+const optionalCoordinateNumber = (fieldLabel: string) =>
+  z.preprocess(
+    (val) => {
+      if (val === undefined || val === null) return undefined;
+      if (typeof val === "string" && val.trim() === "") return NaN;
+      return val;
+    },
+    z.coerce
+      .number({ message: `${fieldLabel}은(는) 유효한 숫자여야 합니다.` })
+      .finite(`${fieldLabel}은(는) 유한한 숫자여야 합니다.`)
+      .optional()
+  );
+
+const optionalRadiusNumber = z.preprocess(
+  (val) => {
+    if (val === undefined || val === null) return undefined;
+    if (typeof val === "string" && val.trim() === "") return NaN;
+    return val;
+  },
+  z.coerce
+    .number({ message: "반경(radiusM)은 유효한 숫자여야 합니다." })
+    .int("반경(radiusM)은 정수여야 합니다.")
+    .min(1, "반경(radiusM)은 1m 이상이어야 합니다.")
+    .max(
+      MAX_NEARBY_RADIUS_M,
+      `반경(radiusM)은 최대 ${MAX_NEARBY_RADIUS_M}m까지 조회할 수 있습니다.`
+    )
+    .optional()
+);
+
 /**
  * Query schema for GET /api/v1/restrooms
- * Format: ?bbox=south,west,north,east&type=all|public|partner&limit=50&offset=0
+ * Supports:
+ * - Nearby mode: ?centerLat=...&centerLng=...&radiusM=400&type=all|public|partner&limit=100&offset=0
+ * - Legacy BBox mode: ?bbox=south,west,north,east&type=all|public|partner&limit=50&offset=0
  */
 export const catalogQuerySchema = z
   .object({
-    bbox: z.string({
-      message: "지도 영역(bbox) 파라미터가 필요합니다.",
-    }),
+    bbox: z.string().optional(),
+    centerLat: optionalCoordinateNumber("중심 위도(centerLat)"),
+    centerLng: optionalCoordinateNumber("중심 경도(centerLng)"),
+    radiusM: optionalRadiusNumber,
     type: z.enum(["all", "public", "partner"]).default("all"),
     limit: z.coerce
       .number()
       .int("조회 개수는 정수여야 합니다.")
       .min(1, "최소 1개 이상 조회해야 합니다.")
-      .max(100, "최대 100개까지 조회할 수 있습니다.")
-      .default(50),
+      .max(MAX_CATALOG_LIMIT, `최대 ${MAX_CATALOG_LIMIT}개까지 조회할 수 있습니다.`)
+      .optional(),
     offset: z.coerce
       .number()
       .int("오프셋은 정수여야 합니다.")
@@ -390,16 +429,65 @@ export const catalogQuerySchema = z
       .optional(),
   })
   .transform((data) => {
+    const isNearby =
+      data.centerLat !== undefined && data.centerLng !== undefined;
+    const resolvedLimit =
+      data.limit ?? (isNearby ? DEFAULT_NEARBY_LIMIT : DEFAULT_BBOX_LIMIT);
+    const resolvedRadiusM = isNearby
+      ? (data.radiusM ?? DEFAULT_NEARBY_RADIUS_M)
+      : data.radiusM;
     const calculatedOffset =
-      data.page !== undefined ? (data.page - 1) * data.limit : data.offset;
+      data.page !== undefined ? (data.page - 1) * resolvedLimit : data.offset;
     return {
       ...data,
+      limit: resolvedLimit,
+      radiusM: resolvedRadiusM,
       offset: calculatedOffset,
     };
   })
   .superRefine((data, ctx) => {
+    const hasCenterLat = data.centerLat !== undefined;
+    const hasCenterLng = data.centerLng !== undefined;
+
+    if (hasCenterLat !== hasCenterLng) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "중심 좌표(centerLat, centerLng)는 함께 제공되어야 합니다.",
+        path: [hasCenterLat ? "centerLng" : "centerLat"],
+      });
+      return;
+    }
+
+    if (hasCenterLat && hasCenterLng) {
+      if (data.centerLat! < LATITUDE_MIN || data.centerLat! > LATITUDE_MAX) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `중심 위도(centerLat)는 ${LATITUDE_MIN}에서 ${LATITUDE_MAX} 사이여야 합니다.`,
+          path: ["centerLat"],
+        });
+      }
+      if (data.centerLng! < LONGITUDE_MIN || data.centerLng! > LONGITUDE_MAX) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `중심 경도(centerLng)는 ${LONGITUDE_MIN}에서 ${LONGITUDE_MAX} 사이여야 합니다.`,
+          path: ["centerLng"],
+        });
+      }
+    }
+
+    if (data.bbox === undefined) {
+      if (!hasCenterLat || !hasCenterLng) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "지도 영역(bbox) 또는 중심 좌표(centerLat, centerLng)가 필요합니다.",
+          path: ["bbox"],
+        });
+      }
+      return;
+    }
+
     const parts = data.bbox.split(",").map((p) => p.trim());
-    if (parts.length !== 4) {
+    if (parts.length !== 4 || parts.some((p) => p === "")) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "bbox는 'south,west,north,east' 형식이어야 합니다.",

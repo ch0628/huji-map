@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient, isServiceRoleConfigured } from "@/lib/supabase/server";
+import { createSignedPhotoReadUrlMap } from "./photo-urls";
 import {
   type CreateMerchantRestroomInput,
   type UpdateMerchantRestroomInput,
@@ -220,9 +221,17 @@ export async function getMerchantRestroomDetail(
   // Load photos (including unapproved photos for merchant review)
   const { data: photos } = await supabase
     .from("restroom_photos")
-    .select("id, storage_path, photo_type, is_primary, moderation_status, created_at")
+    .select("id, restroom_id, storage_path, photo_type, is_primary, moderation_status, uploaded_by, replaces_photo_id, created_at")
     .eq("restroom_id", restroomId)
     .order("created_at", { ascending: false });
+
+  const signedPhotoMap = await createSignedPhotoReadUrlMap(
+    (photos ?? []).map((p: any) => p.storage_path)
+  );
+  const enrichedPhotos = (photos ?? []).map((p: any) => ({
+    ...p,
+    image_url: signedPhotoMap.get(p.storage_path) ?? null,
+  }));
 
   // Load safe PIN registration metadata (NEVER ciphertext/IV/tag/HMAC/plaintext)
   let pinStatus: MerchantRestroomPinStatus = {
@@ -260,7 +269,7 @@ export async function getMerchantRestroomDetail(
     businessId,
     hours: hours ?? [],
     policies: policies ?? [],
-    photos: photos ?? [],
+    photos: enrichedPhotos,
     pinStatus,
   };
 }

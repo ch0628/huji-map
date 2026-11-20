@@ -19,7 +19,6 @@ import {
   formatDistance,
   haversineMeters,
   isInServiceArea,
-  OUT_OF_SERVICE_MESSAGE,
 } from "@/lib/maps/geo";
 import { getMarkerIcon } from "@/lib/maps/marker-icons";
 import type { PublicRestroomSummary } from "@/lib/restrooms/types";
@@ -110,9 +109,9 @@ function mockFetch(searchableRestrooms: PublicRestroomSummary[] = []) {
         }),
       };
     }
-    const bbox = decodeURIComponent(url.split("bbox=")[1].split("&")[0]);
-    const [s, , n] = bbox.split(",").map(Number);
-    const inSuwon = s > 37.2 && n < 37.35;
+    const parsedUrl = new URL(url, "http://localhost");
+    const centerLat = Number(parsedUrl.searchParams.get("centerLat"));
+    const inSuwon = centerLat > 37.2 && centerLat < 37.35;
     const items = inSuwon ? [FAR, NEAR] : [];
     return {
       ok: true,
@@ -126,8 +125,8 @@ function mockFetch(searchableRestrooms: PublicRestroomSummary[] = []) {
   return fn;
 }
 
-const bboxFetchCalls = (fn: ReturnType<typeof mockFetch>) =>
-  fn.mock.calls.filter(([u]) => String(u).includes("bbox="));
+const nearbyFetchCalls = (fn: ReturnType<typeof mockFetch>) =>
+  fn.mock.calls.filter(([u]) => String(u).includes("centerLat="));
 
 describe("지역·장소 검색 유틸", () => {
   it("거리 계산·표시 형식", () => {
@@ -222,7 +221,7 @@ describe("MapDiscoveryClient 지역·장소 검색", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     await waitFor(() => expect(provider.init).toHaveBeenCalled());
     await settle();
-    const fetchesBefore = bboxFetchCalls(fetchMock).length;
+    const fetchesBefore = nearbyFetchCalls(fetchMock).length;
     const centerCallsBefore = provider.setCenter.mock.calls.length;
 
     type("수원역");
@@ -231,7 +230,7 @@ describe("MapDiscoveryClient 지역·장소 검색", () => {
     expect(search).toHaveBeenCalledWith("수원역");
     // 결과 선택 전: 이동 및 주변 화장실 재조회 없음
     expect(provider.setCenter.mock.calls.length).toBe(centerCallsBefore);
-    expect(bboxFetchCalls(fetchMock).length).toBe(fetchesBefore);
+    expect(nearbyFetchCalls(fetchMock).length).toBe(fetchesBefore);
 
     fireEvent.click(screen.getByTestId("place-result-p1"));
     await waitFor(() =>
@@ -241,16 +240,21 @@ describe("MapDiscoveryClient 지역·장소 검색", () => {
       )
     );
     await waitFor(() =>
-      expect(bboxFetchCalls(fetchMock).length).toBeGreaterThan(fetchesBefore)
+      expect(nearbyFetchCalls(fetchMock).length).toBe(fetchesBefore + 1)
     );
-    const lastUrl = decodeURIComponent(
-      bboxFetchCalls(fetchMock).at(-1)![0] as string
+    const lastUrl = new URL(
+      nearbyFetchCalls(fetchMock).at(-1)![0] as string,
+      "http://localhost"
     );
-    const [s, w, n, e] = lastUrl.split("bbox=")[1].split("&")[0].split(",").map(Number);
-    expect(SUWON_STATION.lat).toBeGreaterThan(s);
-    expect(SUWON_STATION.lat).toBeLessThan(n);
-    expect(SUWON_STATION.lng).toBeGreaterThan(w);
-    expect(SUWON_STATION.lng).toBeLessThan(e);
+    expect(Number(lastUrl.searchParams.get("centerLat"))).toBeCloseTo(
+      SUWON_STATION.lat,
+      6
+    );
+    expect(Number(lastUrl.searchParams.get("centerLng"))).toBeCloseTo(
+      SUWON_STATION.lng,
+      6
+    );
+    expect(lastUrl.searchParams.get("bbox")).toBeNull();
     expect(screen.queryByTestId("place-search-results")).toBeNull();
     expect(screen.queryByTestId("out-of-service-banner")).toBeNull();
 
@@ -323,17 +327,30 @@ describe("MapDiscoveryClient 지역·장소 검색", () => {
     ).toBe(true);
   });
 
-  it("수원시 밖 장소는 결과를 보여주고 선택하면 서비스 범위 안내를 표시한다", async () => {
+  it("수원시 밖 장소도 제한 배너 없이 해당 좌표 기준으로 주변 화장실을 조회한다", async () => {
     renderClient(vi.fn().mockResolvedValue([YATAP]), vi.fn().mockResolvedValue([]));
     await waitFor(() => expect(provider.init).toHaveBeenCalled());
+    const fetchesBefore = nearbyFetchCalls(fetchMock).length;
+
     type("야탑역");
     fireEvent.click(await screen.findByTestId("place-result-p2"));
-    const banner = await screen.findByTestId("out-of-service-banner");
-    expect(banner.textContent).toBe(OUT_OF_SERVICE_MESSAGE);
-    expect(provider.setCenter).toHaveBeenCalledWith(
-      { lat: YATAP.lat, lng: YATAP.lng },
-      true
+
+    await waitFor(() =>
+      expect(provider.setCenter).toHaveBeenCalledWith(
+        { lat: YATAP.lat, lng: YATAP.lng },
+        true
+      )
     );
+    await waitFor(() =>
+      expect(nearbyFetchCalls(fetchMock).length).toBe(fetchesBefore + 1)
+    );
+    const lastUrl = new URL(
+      nearbyFetchCalls(fetchMock).at(-1)![0] as string,
+      "http://localhost"
+    );
+    expect(Number(lastUrl.searchParams.get("centerLat"))).toBeCloseTo(YATAP.lat, 6);
+    expect(Number(lastUrl.searchParams.get("centerLng"))).toBeCloseTo(YATAP.lng, 6);
+    expect(screen.queryByTestId("out-of-service-banner")).toBeNull();
   });
 
   it("결과가 없으면 안내하고 기존 지도 마커는 유지한다", async () => {
@@ -341,11 +358,11 @@ describe("MapDiscoveryClient 지역·장소 검색", () => {
     await waitFor(() => expect(provider.setMarkers).toHaveBeenCalled());
     await settle();
     const markerCalls = provider.setMarkers.mock.calls.length;
-    const fetches = bboxFetchCalls(fetchMock).length;
+    const fetches = nearbyFetchCalls(fetchMock).length;
     type("존재하지않는장소zzz");
     expect((await screen.findByTestId("place-search-empty")).textContent).toContain("검색 결과가 없습니다");
     expect(provider.setMarkers.mock.calls.length).toBe(markerCalls);
-    expect(bboxFetchCalls(fetchMock).length).toBe(fetches);
+    expect(nearbyFetchCalls(fetchMock).length).toBe(fetches);
   });
 
   it("검색 실패 시 오류를 표시하되 기존 화장실 데이터는 보존한다", async () => {

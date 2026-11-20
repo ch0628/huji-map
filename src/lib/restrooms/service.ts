@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/db/types";
 import { createAdminClient, isServiceRoleConfigured } from "@/lib/supabase/server";
+import { createSignedPhotoReadUrlMap } from "./photo-urls";
 import type {
   AccessMode,
   PublicBusinessInfo,
@@ -11,7 +12,11 @@ import type {
   PublicRestroomPhoto,
   PublicRestroomSummary,
 } from "./types";
-import { parseBBoxString } from "./validation";
+import {
+  DEFAULT_NEARBY_RADIUS_M,
+  MAX_NEARBY_RADIUS_M,
+  parseBBoxString,
+} from "./validation";
 
 export const PARTNER_DISCOVERY_FLAG_KEY = "partner_restroom_discovery";
 
@@ -28,7 +33,10 @@ export interface PublicCatalogQueryOptions {
 }
 
 export interface ListPublicRestroomsParams {
-  bbox: string;
+  bbox?: string;
+  centerLat?: number;
+  centerLng?: number;
+  radiusM?: number;
   type: "all" | "public" | "partner";
   limit: number;
   offset: number;
@@ -115,8 +123,248 @@ export async function isPartnerRestroomDiscoveryEnabled(
   }
 }
 
+async function resolvePartnerDiscoveryFlag(
+  supabase: SupabaseClient<Database>,
+  type: "all" | "public" | "partner",
+  options?: PublicCatalogQueryOptions
+): Promise<boolean> {
+  if (type === "public") return false;
+  return typeof options?.partnerDiscoveryEnabled === "boolean"
+    ? options.partnerDiscoveryEnabled
+    : isPartnerRestroomDiscoveryEnabled(supabase);
+}
+
+async function resolveApprovedBusinessMap(
+  supabase: SupabaseClient<Database>,
+  businessIds: string[],
+  options?: PublicCatalogQueryOptions
+): Promise<Map<string, { id: string; name: string }> | null> {
+  const uniqueIds = Array.from(new Set(businessIds.filter(Boolean)));
+  const approvedBizMap = new Map<string, { id: string; name: string }>();
+  if (uniqueIds.length === 0) {
+    return approvedBizMap;
+  }
+
+  const bizClient = resolveBusinessClient(supabase, options);
+  const { data: bizData, error: bizError } = await (bizClient as any)
+    .from("businesses")
+    .select("id, name, registration_status")
+    .in("id", uniqueIds)
+    .eq("registration_status", "approved");
+
+  if (bizError) {
+    console.error(
+      "[resolveApprovedBusinessMap] Failed to verify partner businesses:",
+      bizError
+    );
+    return null;
+  }
+
+  if (bizData) {
+    for (const b of bizData) {
+      if (b.registration_status === undefined || b.registration_status === "approved") {
+        approvedBizMap.set(b.id, { id: b.id, name: b.name });
+      }
+    }
+  }
+  return approvedBizMap;
+}
+
+async function countUnapprovedPartnerRestroomsInBBox(
+  supabase: SupabaseClient<Database>,
+  bounds: { south: number; west: number; north: number; east: number },
+  options?: PublicCatalogQueryOptions
+): Promise<{ unapprovedCount: number; approvedIds: Set<string> } | null> {
+  const PAGE_SIZE = 1000;
+  const partnerRows: Array<{ id: string; business_id: string | null }> = [];
+  let offset = 0;
+
+  while (true) {
+    const { data, error } = await (supabase as any)
+      .from("restrooms")
+      .select("id, business_id")
+      .eq("publication_status", "published")
+      .eq("type", "partner")
+      .gte("latitude", bounds.south)
+      .lte("latitude", bounds.north)
+      .gte("longitude", bounds.west)
+      .lte("longitude", bounds.east)
+      .not("latitude", "is", null)
+      .not("longitude", "is", null)
+      .order("id", { ascending: true })
+      .range(offset, offset + PAGE_SIZE - 1);
+
+    if (error || !Array.isArray(data)) {
+      return null;
+    }
+
+    partnerRows.push(...data);
+    if (data.length < PAGE_SIZE) {
+      break;
+    }
+    offset += PAGE_SIZE;
+  }
+
+  if (partnerRows.length === 0) {
+    return { unapprovedCount: 0, approvedIds: new Set() };
+  }
+
+  const bizIds = partnerRows
+    .map((r) => r.business_id)
+    .filter((id): id is string => Boolean(id));
+  const approvedMap = await resolveApprovedBusinessMap(supabase, bizIds, options);
+  if (!approvedMap) {
+    return null;
+  }
+
+  const approvedIds = new Set(approvedMap.keys());
+  let unapprovedCount = 0;
+  for (const r of partnerRows) {
+    if (!r.business_id || !approvedIds.has(r.business_id)) {
+      unapprovedCount += 1;
+    }
+  }
+
+  return { unapprovedCount, approvedIds };
+}
+
+function resolveCatalogTotal(
+  rawTotal: number | null | undefined,
+  rawRowCount: number,
+  hydratedCount: number,
+  limit: number,
+  offset: number,
+  bboxUnapprovedPartnerInfo?: {
+    unapprovedCount: number;
+    currentPageUnapprovedPartnerCount: number;
+  }
+): number {
+  const filteredOutCount = Math.max(0, rawRowCount - hydratedCount);
+  if (offset === 0 && rawRowCount < limit) {
+    return hydratedCount;
+  }
+  if (typeof rawTotal === "number" && Number.isFinite(rawTotal)) {
+    if (bboxUnapprovedPartnerInfo) {
+      const otherFilteredOnPage = Math.max(
+        0,
+        filteredOutCount - bboxUnapprovedPartnerInfo.currentPageUnapprovedPartnerCount
+      );
+      return Math.max(
+        hydratedCount,
+        rawTotal - bboxUnapprovedPartnerInfo.unapprovedCount - otherFilteredOnPage
+      );
+    }
+    return Math.max(hydratedCount, rawTotal - filteredOutCount);
+  }
+  return hydratedCount;
+}
+
 /**
- * List publicly visible restrooms within a bounding box (for map search and catalog).
+ * List publicly visible restrooms within radius (default 400m) of a search center,
+ * filtered by publication/business-approval/flag policy BEFORE distance sorting and LIMIT.
+ */
+export async function listNearbyPublicRestrooms(
+  supabase: SupabaseClient<Database>,
+  params: {
+    centerLat: number;
+    centerLng: number;
+    radiusM?: number;
+    type: "all" | "public" | "partner";
+    limit: number;
+    offset: number;
+  },
+  options?: PublicCatalogQueryOptions
+): Promise<ListPublicRestroomsResult> {
+  const partnerDiscoveryEnabled = await resolvePartnerDiscoveryFlag(
+    supabase,
+    params.type,
+    options
+  );
+
+  if (params.type === "partner" && !partnerDiscoveryEnabled) {
+    return {
+      items: [],
+      total: 0,
+      limit: params.limit,
+      offset: params.offset,
+    };
+  }
+
+  const effectiveType =
+    params.type === "all" && !partnerDiscoveryEnabled ? "public" : params.type;
+  const radiusM = Math.min(
+    MAX_NEARBY_RADIUS_M,
+    Math.max(1, Math.trunc(params.radiusM ?? DEFAULT_NEARBY_RADIUS_M))
+  );
+
+  const { data: rows, error } = await (supabase as any).rpc(
+    "list_nearby_public_restrooms",
+    {
+      p_center_lat: params.centerLat,
+      p_center_lng: params.centerLng,
+      p_radius_m: radiusM,
+      p_type: effectiveType,
+      p_limit: params.limit,
+      p_offset: params.offset,
+    }
+  );
+
+  if (error) {
+    throw error;
+  }
+
+  if (!rows || rows.length === 0) {
+    return {
+      items: [],
+      total: 0,
+      limit: params.limit,
+      offset: params.offset,
+    };
+  }
+
+  const distanceMap = new Map<string, number>();
+  for (const r of rows) {
+    if (typeof r.id === "string" && typeof r.distance_meters === "number") {
+      distanceMap.set(r.id, r.distance_meters);
+    }
+  }
+
+  const rawTotalValue = rows[0]?.total_count;
+  const parsedRawTotal =
+    typeof rawTotalValue === "number"
+      ? rawTotalValue
+      : typeof rawTotalValue === "string"
+        ? Number(rawTotalValue)
+        : null;
+
+  const hydrated = await hydratePublicRestroomSummaries(
+    supabase,
+    rows,
+    partnerDiscoveryEnabled,
+    options
+  );
+
+  const items: PublicRestroomSummary[] = hydrated.map((item) => {
+    const dist = distanceMap.get(item.id);
+    return dist !== undefined ? { ...item, distance_meters: dist } : item;
+  });
+
+  return {
+    items,
+    total: resolveCatalogTotal(
+      parsedRawTotal,
+      rows.length,
+      items.length,
+      params.limit,
+      params.offset
+    ),
+    limit: params.limit,
+    offset: params.offset,
+  };
+}
+
+/**
+ * List publicly visible restrooms within a bounding box or nearby center radius.
  * Excludes draft/pending/suspended/archived restrooms, unlocated (null coords) restrooms,
  * restrooms of non-approved businesses, and partner restrooms when `partner_restroom_discovery` is disabled.
  */
@@ -125,16 +373,36 @@ export async function listPublicRestrooms(
   params: ListPublicRestroomsParams,
   options?: PublicCatalogQueryOptions
 ): Promise<ListPublicRestroomsResult> {
+  if (
+    typeof params.centerLat === "number" &&
+    typeof params.centerLng === "number"
+  ) {
+    return listNearbyPublicRestrooms(
+      supabase,
+      {
+        centerLat: params.centerLat,
+        centerLng: params.centerLng,
+        radiusM: params.radiusM,
+        type: params.type,
+        limit: params.limit,
+        offset: params.offset,
+      },
+      options
+    );
+  }
+
+  if (!params.bbox) {
+    throw new Error("bbox or centerLat/centerLng is required.");
+  }
+
   const { south, west, north, east } = parseBBoxString(params.bbox);
 
   // Public restroom discovery is never affected by partner_restroom_discovery
-  let partnerDiscoveryEnabled = false;
-  if (params.type !== "public") {
-    partnerDiscoveryEnabled =
-      typeof options?.partnerDiscoveryEnabled === "boolean"
-        ? options.partnerDiscoveryEnabled
-        : await isPartnerRestroomDiscoveryEnabled(supabase);
-  }
+  const partnerDiscoveryEnabled = await resolvePartnerDiscoveryFlag(
+    supabase,
+    params.type,
+    options
+  );
 
   if (params.type === "partner" && !partnerDiscoveryEnabled) {
     return {
@@ -171,9 +439,25 @@ export async function listPublicRestrooms(
   }
 
   if (!rows || rows.length === 0) {
+    let emptyPageTotal = count ?? 0;
+    if (
+      partnerDiscoveryEnabled &&
+      params.type !== "public" &&
+      typeof count === "number" &&
+      count > 0
+    ) {
+      const partnerStats = await countUnapprovedPartnerRestroomsInBBox(
+        supabase,
+        { south, west, north, east },
+        options
+      );
+      if (partnerStats) {
+        emptyPageTotal = Math.max(0, count - partnerStats.unapprovedCount);
+      }
+    }
     return {
       items: [],
-      total: count ?? 0,
+      total: emptyPageTotal,
       limit: params.limit,
       offset: params.offset,
     };
@@ -186,9 +470,47 @@ export async function listPublicRestrooms(
     options
   );
 
+  let bboxUnapprovedPartnerInfo:
+    | {
+        unapprovedCount: number;
+        currentPageUnapprovedPartnerCount: number;
+      }
+    | undefined;
+
+  const isMultiPage =
+    params.offset > 0 ||
+    rows.length >= params.limit ||
+    (typeof count === "number" && count > rows.length);
+
+  if (partnerDiscoveryEnabled && params.type !== "public" && isMultiPage) {
+    const partnerStats = await countUnapprovedPartnerRestroomsInBBox(
+      supabase,
+      { south, west, north, east },
+      options
+    );
+    if (partnerStats) {
+      const currentPageUnapprovedPartnerCount = rows.filter(
+        (r: any) =>
+          r.type === "partner" &&
+          (!r.business_id || !partnerStats.approvedIds.has(r.business_id))
+      ).length;
+      bboxUnapprovedPartnerInfo = {
+        unapprovedCount: partnerStats.unapprovedCount,
+        currentPageUnapprovedPartnerCount,
+      };
+    }
+  }
+
   return {
     items,
-    total: items.length === rows.length ? (count ?? items.length) : items.length,
+    total: resolveCatalogTotal(
+      count,
+      rows.length,
+      items.length,
+      params.limit,
+      params.offset,
+      bboxUnapprovedPartnerInfo
+    ),
     limit: params.limit,
     offset: params.offset,
   };
@@ -216,28 +538,9 @@ async function hydratePublicRestroomSummaries(
       )
     : [];
 
-  const approvedBizMap = new Map<string, { id: string; name: string }>();
-  if (partnerBizIds.length > 0) {
-    const bizClient = resolveBusinessClient(supabase, options);
-    const { data: bizData, error: bizError } = await (bizClient as any)
-      .from("businesses")
-      .select("id, name, registration_status")
-      .in("id", partnerBizIds)
-      .eq("registration_status", "approved");
-
-    if (bizError) {
-      console.error(
-        "[hydratePublicRestroomSummaries] Failed to verify partner businesses:",
-        bizError
-      );
-    } else if (bizData) {
-      for (const b of bizData) {
-        if (b.registration_status === undefined || b.registration_status === "approved") {
-          approvedBizMap.set(b.id, { id: b.id, name: b.name });
-        }
-      }
-    }
-  }
+  const approvedBizMap =
+    (await resolveApprovedBusinessMap(supabase, partnerBizIds, options)) ??
+    new Map<string, { id: string; name: string }>();
 
   // Filter out unpublished rows, invalid coordinates, and partner restrooms whose business is NOT approved
   const validRows = rows.filter((r: any) => {
@@ -302,6 +605,10 @@ async function hydratePublicRestroomSummaries(
     }
   }
 
+  const signedPhotoMap = await createSignedPhotoReadUrlMap(
+    Array.from(photoMap.values())
+  );
+
   return validRows.map((r: any) => {
     const policy = policyMap.get(r.id);
     const photoStoragePath = photoMap.get(r.id);
@@ -326,6 +633,9 @@ async function hydratePublicRestroomSummaries(
       deposit_amount_krw: policy ? policy.deposit_amount_krw : null,
       access_mode: policy ? policy.access_mode : null,
       primary_photo_storage_path: photoStoragePath ?? null,
+      primary_photo_url: photoStoragePath
+        ? signedPhotoMap.get(photoStoragePath) ?? null
+        : null,
     };
   });
 }
@@ -556,11 +866,16 @@ export async function getPublicRestroomDetail(
     .order("is_primary", { ascending: false })
     .order("created_at", { ascending: true });
 
+  const signedDetailPhotoMap = await createSignedPhotoReadUrlMap(
+    (photosData || []).map((p: any) => p.storage_path)
+  );
+
   const photos: PublicRestroomPhoto[] = (photosData || []).map((p: any) => ({
     id: p.id,
     storage_path: p.storage_path,
     photo_type: p.photo_type,
     is_primary: p.is_primary,
+    image_url: signedDetailPhotoMap.get(p.storage_path) ?? null,
   }));
 
   return {

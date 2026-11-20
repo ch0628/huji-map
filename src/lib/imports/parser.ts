@@ -3,6 +3,10 @@ import type { RawPublicRestroomRecord, ParsedPublicRestroom } from "./types";
 
 export type CsvEncoding = "auto" | "utf8" | "cp949";
 
+export function computeContentHash(content: string): string {
+  return crypto.createHash("sha256").update(content).digest("hex");
+}
+
 /**
  * Decodes raw CSV buffer supporting UTF-8 and CP949 (EUC-KR / Windows-949).
  * In "auto" mode, validates strict UTF-8 first and falls back to CP949.

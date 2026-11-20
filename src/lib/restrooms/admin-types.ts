@@ -40,6 +40,7 @@ export interface AdminRestroomSummaryItem {
   created_at: string;
   updated_at: string;
   primary_photo_storage_path?: string | null;
+  pending_photo_count?: number;
 }
 
 export interface AdminRestroomBusinessSummary {

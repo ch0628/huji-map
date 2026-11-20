@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type {
   Restroom,
@@ -16,6 +16,11 @@ import {
 } from "@/lib/restrooms/merchant-validation";
 import type { AddressSearchFn, AddressSearchResult } from "@/lib/maps/address-search";
 import AddressSearchField from "@/components/map/AddressSearchField";
+import RestroomPhotoManager, {
+  uploadRestroomPhotoFile,
+  type QueuedRestroomPhoto,
+  type RestroomPhotoUploadFn,
+} from "@/components/restroom/RestroomPhotoManager";
 
 type WeekdayMode = "unset" | "open" | "closed";
 
@@ -70,6 +75,7 @@ interface RestroomFormProps {
   onSuccess?: (savedRestroom: any) => void;
   onCancel?: () => void;
   addressSearchFn?: AddressSearchFn;
+  photoUploadFn?: RestroomPhotoUploadFn;
 }
 
 export default function RestroomForm({
@@ -82,6 +88,7 @@ export default function RestroomForm({
   onSuccess,
   onCancel,
   addressSearchFn,
+  photoUploadFn = uploadRestroomPhotoFile,
 }: RestroomFormProps) {
   const router = useRouter();
   const isEdit = mode === "edit";
@@ -136,6 +143,10 @@ export default function RestroomForm({
     "free_with_ad"
   );
   const [depositAmountInput, setDepositAmountInput] = useState<string>("1000");
+
+  // Queued photos for creation
+  const [queuedPhotos, setQueuedPhotos] = useState<QueuedRestroomPhoto[]>([]);
+  const createdDraftRef = useRef<any | null>(null);
 
   // Status & Validation
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -280,62 +291,97 @@ export default function RestroomForm({
       setIsSubmitting(true);
 
       if (mode === "create") {
-        const payload: Record<string, any> = {
-          business_id: businessId,
-          name: name.trim(),
-          description: description.trim() || undefined,
-          road_address: roadAddress.trim(),
-          address_detail: addressDetail.trim() || undefined,
-          latitude: latitude!,
-          longitude: longitude!,
-          floor: floor.trim() || undefined,
-          entrance_instructions: entranceInstructions.trim() || undefined,
-          gender_type: genderType,
-          wheelchair_accessible: wheelchairAccessible,
-          baby_changing_available: babyChangingAvailable,
-          sanitary_products_available: sanitaryProductsAvailable,
-          access_method: accessMethod,
-          policy_mode: policyMode,
-        };
-        if (parsedDepositAmount !== undefined) {
-          payload.deposit_amount_krw = parsedDepositAmount;
-        }
-        if (hoursPayload.length > 0) {
-          payload.hours = hoursPayload;
-        }
+        let savedRestroom = createdDraftRef.current;
 
-        const validation = createMerchantRestroomSchema.safeParse(payload);
-        if (!validation.success) {
-          const errors: Record<string, string> = {};
-          validation.error.issues.forEach((issue) => {
-            const key = issue.path[0];
-            if (key) errors[String(key)] = issue.message;
+        if (!savedRestroom) {
+          const payload: Record<string, any> = {
+            business_id: businessId,
+            name: name.trim(),
+            description: description.trim() || undefined,
+            road_address: roadAddress.trim(),
+            address_detail: addressDetail.trim() || undefined,
+            latitude: latitude!,
+            longitude: longitude!,
+            floor: floor.trim() || undefined,
+            entrance_instructions: entranceInstructions.trim() || undefined,
+            gender_type: genderType,
+            wheelchair_accessible: wheelchairAccessible,
+            baby_changing_available: babyChangingAvailable,
+            sanitary_products_available: sanitaryProductsAvailable,
+            access_method: accessMethod,
+            policy_mode: policyMode,
+          };
+          if (parsedDepositAmount !== undefined) {
+            payload.deposit_amount_krw = parsedDepositAmount;
+          }
+          if (hoursPayload.length > 0) {
+            payload.hours = hoursPayload;
+          }
+
+          const validation = createMerchantRestroomSchema.safeParse(payload);
+          if (!validation.success) {
+            const errors: Record<string, string> = {};
+            validation.error.issues.forEach((issue) => {
+              const key = issue.path[0];
+              if (key) errors[String(key)] = issue.message;
+            });
+            setFieldErrors(errors);
+            setIsSubmitting(false);
+            return;
+          }
+
+          const res = await fetch("/api/v1/merchant/restrooms", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-idempotency-key": idempotencyKey,
+            },
+            body: JSON.stringify(payload),
           });
-          setFieldErrors(errors);
-          setIsSubmitting(false);
-          return;
+
+          const data = await res.json();
+
+          if (!res.ok || !data.ok) {
+            throw new Error(data.error?.message || "화장실 등록에 실패했습니다.");
+          }
+
+          savedRestroom = data.data;
+          createdDraftRef.current = savedRestroom;
         }
 
-        const res = await fetch("/api/v1/merchant/restrooms", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-idempotency-key": idempotencyKey,
-          },
-          body: JSON.stringify(payload),
-        });
-
-        const data = await res.json();
-
-        if (!res.ok || !data.ok) {
-          throw new Error(data.error?.message || "화장실 등록에 실패했습니다.");
+        if (queuedPhotos.length > 0 && savedRestroom?.id) {
+          const ordered = [...queuedPhotos].sort((a, b) =>
+            a.isPrimary === b.isPrimary ? 0 : a.isPrimary ? -1 : 1
+          );
+          let remaining = [...ordered];
+          for (const item of ordered) {
+            try {
+              await photoUploadFn({
+                restroomId: savedRestroom.id,
+                file: item.file,
+                photoType: item.photoType,
+                isPrimary: item.isPrimary,
+                replacesPhotoId: null,
+              });
+              remaining = remaining.filter((q) => q.localId !== item.localId);
+              setQueuedPhotos(remaining);
+            } catch (photoErr: unknown) {
+              const reason =
+                photoErr instanceof Error
+                  ? photoErr.message
+                  : "사진 업로드에 실패했습니다.";
+              throw new Error(
+                `화장실 정보는 임시저장되었으나 사진 업로드에 실패했습니다: ${reason}`
+              );
+            }
+          }
         }
 
         setSuccessMessage("화장실이 임시저장(draft) 상태로 등록되었습니다.");
         if (onSuccess) {
-          onSuccess(data.data);
+          onSuccess(savedRestroom);
         } else {
-          router.push(`/merchant/restrooms/${data.data.id}`);
+          router.push(`/merchant/restrooms/${savedRestroom.id}`);
         }
       } else {
         // Edit Mode
@@ -873,6 +919,16 @@ export default function RestroomForm({
             </label>
           </div>
         </div>
+      )}
+
+      {/* 6. 화장실 사진 첨부 (신규 등록 시) */}
+      {!isEdit && (
+        <RestroomPhotoManager
+          mode="create"
+          queuedPhotos={queuedPhotos}
+          onQueuedPhotosChange={setQueuedPhotos}
+          disabled={isSubmitting}
+        />
       )}
 
       {/* 제출 및 취소 버튼 */}

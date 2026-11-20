@@ -69,8 +69,8 @@ export default function PublicRestroomCard({
           : "border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-sm hover:border-slate-300 dark:hover:border-slate-700"
       } ${compact ? "p-3.5" : "p-4"}`}
     >
-      {/* 상단: 구분 뱃지 및 이름 */}
-      <div className="flex items-start justify-between gap-2">
+      {/* 상단: 구분 뱃지 및 이름 (+ 승인된 대표 사진 썸네일) */}
+      <div className="flex items-start justify-between gap-2.5">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             {/* 공공 vs 제휴 구분 뱃지 */}
@@ -101,6 +101,18 @@ export default function PublicRestroomCard({
           </p>
           {distanceMeters !== undefined && (<p data-testid={`restroom-distance-${restroom.id}`} className="mt-0.5 text-xs font-semibold text-blue-700 dark:text-blue-300">📍 {formatDistance(distanceMeters)}</p>)}
         </div>
+
+        {restroom.primary_photo_url && (
+          <div className="h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={restroom.primary_photo_url}
+              alt={`${restroom.name} 대표 사진`}
+              data-testid={`public-restroom-thumb-${restroom.id}`}
+              className="h-full w-full object-cover"
+            />
+          </div>
+        )}
       </div>
 
       {/* 이용 조건 안내 배너 */}

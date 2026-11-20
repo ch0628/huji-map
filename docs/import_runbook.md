@@ -66,10 +66,16 @@ npx tsx scripts/import-public-restrooms.ts --file tests/fixtures/public/suwon_pu
 ```
 
 ### 4.2 실제 DB 반영 (Live: 관리자 권한 및 2중 확인 필수)
-> **안전 가드**: `--live` 모드 진입 시 대상 DB, 출처, 파싱 통계가 먼저 화면에 출력되며, `--confirm` 플래그가 없으면 실제 쓰기를 수행하지 않고 중단됩니다.
+> **안전 가드**: `--live` 모드 진입 시 먼저 파싱 요약만 출력되며, `--confirm` 플래그가 없으면 실제 쓰기를 수행하지 않고 중단됩니다.
 ```bash
 # 실제 DB 반영 시 --confirm 플래그 필수
 npx tsx scripts/import-public-restrooms.ts --file <실제_CSV_파일경로> --live --confirm
+
+# 전국 53,584건 수집 예시 (일일 호출 상한 30,000건 / 동시성 1 / 100ms 간격 / 배치 500건 / 미변환 신규 제외)
+npx tsx scripts/import-public-restrooms.ts --file local-data/public_restroom_raw.csv --all-cities --geocode --live --confirm
+
+# 중단/할당량 도달 후 이어하기 (--resume)
+npx tsx scripts/import-public-restrooms.ts --file local-data/public_restroom_raw.csv --all-cities --geocode --resume --live --confirm
 ```
 
 ---

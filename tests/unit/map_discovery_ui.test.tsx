@@ -3,8 +3,10 @@
  */
 
 import React from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import * as locationLib from "@/lib/maps/location";
+import { SUWON_DEFAULT_CENTER, type MapOptions, type MapProvider, type MarkerOptions } from "@/lib/maps/types";
 import type {
   PublicRestroomSummary,
   PublicRestroomDetail,
@@ -15,7 +17,6 @@ import MapDirectionsModal from "@/components/map/MapDirectionsModal";
 import MapFilterBar from "@/components/map/MapFilterBar";
 import MapBottomSheet from "@/components/map/MapBottomSheet";
 import MapDiscoveryClient from "@/components/map/MapDiscoveryClient";
-import type { MapProvider } from "@/lib/maps/types";
 
 describe("TASK 16: Map Discovery UI - Cards, Filters, BottomSheet, Directions & Details", () => {
   const mockPublicRestroom: PublicRestroomSummary = {
@@ -409,14 +410,19 @@ describe("TASK 16: Map Discovery UI - Cards, Filters, BottomSheet, Directions & 
     });
   });
 
-  describe("6. MapDiscoveryClient (지도 탐색 통합 컨트롤러)", () => {
+  describe("6. MapDiscoveryClient (지도 탐색 통합 컨트롤러 - TASK B)", () => {
+    let capturedOptions: MapOptions | null = null;
+    let capturedMarkers: readonly MarkerOptions[] = [];
+
     const createMockProvider = (): MapProvider => ({
       name: "mock-provider",
-      init: vi.fn().mockResolvedValue(undefined),
+      init: vi.fn(async (_container, options) => {
+        capturedOptions = options;
+      }),
       destroy: vi.fn(),
       getCenter: vi.fn().mockReturnValue({ lat: 37.2635, lng: 127.0286 }),
       setCenter: vi.fn(),
-      getZoomLevel: vi.fn().mockReturnValue(4),
+      getZoomLevel: vi.fn().mockReturnValue(3),
       setZoomLevel: vi.fn(),
       getBounds: vi.fn().mockReturnValue({
         south: 37.25,
@@ -425,15 +431,27 @@ describe("TASK 16: Map Discovery UI - Cards, Filters, BottomSheet, Directions & 
         east: 127.03,
       }),
       fitBounds: vi.fn(),
-      setMarkers: vi.fn(),
+      setMarkers: vi.fn((markers) => {
+        capturedMarkers = markers;
+      }),
       addMarker: vi.fn(),
       removeMarker: vi.fn(),
       clearMarkers: vi.fn(),
       relayout: vi.fn(),
     });
 
+    const getRestroomFetchCalls = (spy: ReturnType<typeof vi.fn>) =>
+      spy.mock.calls.filter(([u]) => {
+        const s = String(u);
+        return s.includes("/api/v1/restrooms") && !s.includes("/search");
+      });
+
+    let fetchSpy: ReturnType<typeof vi.fn>;
+
     beforeEach(() => {
-      global.fetch = vi.fn().mockResolvedValue({
+      capturedOptions = null;
+      capturedMarkers = [];
+      fetchSpy = vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
           ok: true,
@@ -445,19 +463,235 @@ describe("TASK 16: Map Discovery UI - Cards, Filters, BottomSheet, Directions & 
           },
         }),
       } as any);
+      global.fetch = fetchSpy as any;
     });
 
-    it("커스텀 MapProvider 주입을 통해 지도를 초기화하고 컨트롤 요소들을 렌더링한다", async () => {
-      const mockFactory = () => createMockProvider();
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
 
-      render(<MapDiscoveryClient providerFactory={mockFactory} />);
+    it("1) 지도 최초 실행 시 현재 지도 중심(centerLat/centerLng) 기준으로 1회만 단일 조회한다", async () => {
+      const provider = createMockProvider();
+      render(<MapDiscoveryClient providerFactory={() => provider} />);
 
-      expect(screen.getByTestId("map-discovery-container")).toBeDefined();
-      expect(screen.getByTestId("map-filter-bar")).toBeDefined();
-      expect(screen.getByTestId("map-zoom-in-btn")).toBeDefined();
-      expect(screen.getByTestId("map-zoom-out-btn")).toBeDefined();
-      expect(screen.getByTestId("map-recenter-btn")).toBeDefined();
-      expect(screen.getByTestId("map-bottom-sheet-drawer")).toBeDefined();
+      await waitFor(() => expect(provider.init).toHaveBeenCalled());
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 450));
+      });
+
+      const calls = getRestroomFetchCalls(fetchSpy);
+      expect(calls).toHaveLength(1);
+
+      const reqUrl = new URL(String(calls[0][0]), "http://localhost");
+      expect(Number(reqUrl.searchParams.get("centerLat"))).toBeCloseTo(
+        SUWON_DEFAULT_CENTER.lat,
+        6
+      );
+      expect(Number(reqUrl.searchParams.get("centerLng"))).toBeCloseTo(
+        SUWON_DEFAULT_CENTER.lng,
+        6
+      );
+      expect(reqUrl.searchParams.get("radiusM")).toBe("400");
+      expect(reqUrl.searchParams.get("limit")).toBe("100");
+      expect(reqUrl.searchParams.get("bbox")).toBeNull();
+      expect(screen.queryByTestId("search-this-area-btn")).toBeNull();
+      expect(screen.queryByTestId("out-of-service-banner")).toBeNull();
+    });
+
+    it("2) 지도 이동·확대·축소 시 자동 조회하지 않고 '이 지역에서 재검색' 버튼 클릭 시 1회 조회한다", async () => {
+      const provider = createMockProvider();
+      render(<MapDiscoveryClient providerFactory={() => provider} />);
+
+      await waitFor(() => expect(provider.init).toHaveBeenCalled());
+      await waitFor(() => expect(getRestroomFetchCalls(fetchSpy)).toHaveLength(1));
+
+      // 사용자 지도 이동 시뮬레이션 (부산 지역 bounds)
+      act(() => {
+        capturedOptions?.onBoundsChanged?.({
+          south: 35.15,
+          west: 129.05,
+          north: 35.17,
+          east: 129.07,
+        });
+      });
+
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 450));
+      });
+
+      // 자동 재조회 없음 + 재검색 버튼 노출
+      expect(getRestroomFetchCalls(fetchSpy)).toHaveLength(1);
+      const researchBtn = screen.getByTestId("search-this-area-btn");
+      expect(researchBtn.textContent).toContain("이 지역에서 재검색");
+
+      // 재검색 버튼 클릭 -> 새 지도 중심(35.16, 129.06) 기준으로 1회 조회
+      fireEvent.click(researchBtn);
+      await waitFor(() => expect(getRestroomFetchCalls(fetchSpy)).toHaveLength(2));
+      expect(screen.queryByTestId("search-this-area-btn")).toBeNull();
+
+      const secondUrl = new URL(
+        String(getRestroomFetchCalls(fetchSpy)[1][0]),
+        "http://localhost"
+      );
+      expect(Number(secondUrl.searchParams.get("centerLat"))).toBeCloseTo(35.16, 5);
+      expect(Number(secondUrl.searchParams.get("centerLng"))).toBeCloseTo(129.06, 5);
+
+      // 확대/축소 버튼 클릭 시에도 자동 재조회 없이 버튼만 표시
+      fireEvent.click(screen.getByTestId("map-zoom-in-btn"));
+      expect(getRestroomFetchCalls(fetchSpy)).toHaveLength(2);
+      expect(screen.getByTestId("search-this-area-btn")).toBeDefined();
+
+      // 줌 이벤트 직접 발생 시에도 자동 재조회 없이 버튼 표시
+      fireEvent.click(screen.getByTestId("search-this-area-btn"));
+      await waitFor(() => expect(getRestroomFetchCalls(fetchSpy)).toHaveLength(3));
+      act(() => {
+        capturedOptions?.onZoomChanged?.(5);
+      });
+      expect(getRestroomFetchCalls(fetchSpy)).toHaveLength(3);
+      expect(screen.getByTestId("search-this-area-btn")).toBeDefined();
+    });
+
+    it("3) 서버가 반환한 거리순 최대 100건 순서를 유지하여 표시한다", async () => {
+      const serverOrdered = [
+        { ...mockPartnerRestroom, distance_meters: 85 },
+        { ...mockPublicRestroom, distance_meters: 210 },
+      ];
+      fetchSpy.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          data: {
+            items: serverOrdered,
+            total: 150,
+            limit: 100,
+            offset: 0,
+          },
+        }),
+      } as any);
+
+      const provider = createMockProvider();
+      render(<MapDiscoveryClient providerFactory={() => provider} />);
+
+      await waitFor(() => expect(getRestroomFetchCalls(fetchSpy)).toHaveLength(1));
+      fireEvent.click(screen.getByTestId("bottom-sheet-toggle-btn"));
+      const cards = await screen.findAllByTestId(/^public-restroom-card-/);
+      expect(cards[0].getAttribute("data-testid")).toContain(mockPartnerRestroom.id);
+      expect(cards[1].getAttribute("data-testid")).toContain(mockPublicRestroom.id);
+      expect(screen.getByTestId(`restroom-distance-${mockPartnerRestroom.id}`).textContent).toContain("90m");
+      expect(screen.getByTestId(`restroom-distance-${mockPublicRestroom.id}`).textContent).toContain("210m");
+    });
+
+    it("4) 내 위치 이동·필터 변경은 1회 조회하고, 마커·목록 선택만으로는 재조회하지 않는다", async () => {
+      const seoulCoords = { lat: 37.5547, lng: 126.9707 };
+      vi.spyOn(locationLib, "getCurrentUserLocation").mockResolvedValue({
+        success: true,
+        coords: seoulCoords,
+      });
+
+      const provider = createMockProvider();
+      render(<MapDiscoveryClient providerFactory={() => provider} />);
+
+      await waitFor(() => expect(getRestroomFetchCalls(fetchSpy)).toHaveLength(1));
+      await waitFor(() => expect(capturedMarkers.length).toBeGreaterThanOrEqual(2));
+
+      // 마커 클릭: 재조회 없음 & 재검색 버튼 미표시
+      const marker = capturedMarkers.find((m) => m.id === mockPublicRestroom.id);
+      expect(marker).toBeDefined();
+      act(() => {
+        marker?.onClick?.(mockPublicRestroom.id);
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 100));
+      });
+      expect(getRestroomFetchCalls(fetchSpy)).toHaveLength(1);
+      expect(screen.queryByTestId("search-this-area-btn")).toBeNull();
+
+      // 선택 닫고 목록에서 화장실 선택: 재조회 없음
+      fireEvent.click(screen.getByTestId("bottom-sheet-close-btn"));
+      fireEvent.click(screen.getByTestId("bottom-sheet-toggle-btn"));
+      fireEvent.click(screen.getByTestId(`public-restroom-card-${mockPartnerRestroom.id}`));
+      expect(getRestroomFetchCalls(fetchSpy)).toHaveLength(1);
+
+      // 필터 변경: 1회 조회
+      fireEvent.click(screen.getByTestId("filter-chip-public"));
+      await waitFor(() => expect(getRestroomFetchCalls(fetchSpy)).toHaveLength(2));
+      const filterUrl = new URL(
+        String(getRestroomFetchCalls(fetchSpy)[1][0]),
+        "http://localhost"
+      );
+      expect(filterUrl.searchParams.get("type")).toBe("public");
+
+      // 내 위치 이동 (서울역): 1회 조회 (수원시 제한 없음)
+      fireEvent.click(screen.getByTestId("current-location-btn"));
+      await waitFor(() => expect(getRestroomFetchCalls(fetchSpy)).toHaveLength(3));
+      const locUrl = new URL(
+        String(getRestroomFetchCalls(fetchSpy)[2][0]),
+        "http://localhost"
+      );
+      expect(Number(locUrl.searchParams.get("centerLat"))).toBeCloseTo(seoulCoords.lat, 6);
+      expect(Number(locUrl.searchParams.get("centerLng"))).toBeCloseTo(seoulCoords.lng, 6);
+      expect(screen.queryByTestId("out-of-service-banner")).toBeNull();
+    });
+
+    it("5) 이전 요청이 취소되더라도 현재 진행 중인 요청의 로딩 표시가 사라지지 않는다", async () => {
+      let rejectFirst!: (err: Error) => void;
+      let resolveSecond!: (res: any) => void;
+      let callCount = 0;
+
+      fetchSpy.mockImplementation((url: string, init?: RequestInit) => {
+        if (!String(url).includes("/api/v1/restrooms")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ ok: true, data: {} }),
+          });
+        }
+        callCount += 1;
+        if (callCount === 1) {
+          return new Promise((_resolve, reject) => {
+            rejectFirst = reject;
+            init?.signal?.addEventListener("abort", () => {
+              const abortErr = new Error("Aborted");
+              abortErr.name = "AbortError";
+              reject(abortErr);
+            });
+          });
+        }
+        return new Promise((resolve) => {
+          resolveSecond = resolve;
+        });
+      });
+
+      const provider = createMockProvider();
+      render(<MapDiscoveryClient providerFactory={() => provider} />);
+
+      // 1번째 요청 진행 중 (로딩 표시)
+      await waitFor(() => expect(callCount).toBe(1));
+      expect(screen.getByText("조회 중")).toBeDefined();
+
+      // 필터 클릭으로 2번째 요청 시작 -> 1번째 요청 AbortError 발생
+      fireEvent.click(screen.getByTestId("filter-chip-partner"));
+      await waitFor(() => expect(callCount).toBe(2));
+
+      // 마이크로태스크 플러시 후에도 2번째 요청이 진행 중이므로 로딩 표시 유지
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.getByText("조회 중")).toBeDefined();
+      expect(screen.getByText("화장실 정보 불러오는 중...")).toBeDefined();
+
+      // 2번째 요청 완료 시 비로소 로딩 종료
+      await act(async () => {
+        resolveSecond({
+          ok: true,
+          json: async () => ({
+            ok: true,
+            data: { items: [mockPartnerRestroom], total: 1, limit: 100, offset: 0 },
+          }),
+        });
+      });
+      await waitFor(() => expect(screen.queryByText("조회 중")).toBeNull());
+      expect(rejectFirst).toBeDefined();
     });
   });
 });

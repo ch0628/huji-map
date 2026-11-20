@@ -2,13 +2,15 @@
 
 import React, { useEffect, useState, useCallback } from "react";
 import RestroomStatusBadge from "@/components/restroom/RestroomStatusBadge";
+import { PHOTO_TYPE_LABELS } from "@/components/restroom/RestroomPhotoManager";
 import type {
   AdminRestroomSummaryItem,
   AdminRestroomDetail,
   AdminRestroomDecision,
+  RestroomPhoto,
 } from "@/lib/restrooms";
 
-type TabStatus = "pending" | "published" | "suspended" | "all";
+type TabStatus = "pending" | "pending_photos" | "published" | "suspended" | "all";
 
 export default function AdminRestroomsClient() {
   const [activeTab, setActiveTab] = useState<TabStatus>("pending");
@@ -30,6 +32,11 @@ export default function AdminRestroomsClient() {
   const [isSubmittingDecision, setIsSubmittingDecision] = useState(false);
   const [decisionSuccessMessage, setDecisionSuccessMessage] = useState<string | null>(null);
   const [decisionErrorMessage, setDecisionErrorMessage] = useState<string | null>(null);
+
+  // Post-approval photo replacement review state
+  const [rejectingPhotoId, setRejectingPhotoId] = useState<string | null>(null);
+  const [photoRejectReason, setPhotoRejectReason] = useState("");
+  const [isSubmittingPhotoDecision, setIsSubmittingPhotoDecision] = useState(false);
 
   const fetchRestrooms = useCallback(async () => {
     setIsLoading(true);
@@ -153,6 +160,65 @@ export default function AdminRestroomsClient() {
     }
   };
 
+  const handlePhotoReplacementDecision = async (
+    photo: RestroomPhoto,
+    decision: "approve" | "reject"
+  ) => {
+    if (!detail || isSubmittingPhotoDecision) return;
+
+    if (decision === "reject" && photoRejectReason.trim().length < 2) {
+      setDecisionErrorMessage("사진 반려 사유를 2자 이상 구체적으로 입력해 주세요.");
+      return;
+    }
+
+    setIsSubmittingPhotoDecision(true);
+    setDecisionErrorMessage(null);
+    setDecisionSuccessMessage(null);
+
+    try {
+      const payload: { decision: "approve" | "reject"; reason?: string } = { decision };
+      if (decision === "reject") {
+        payload.reason = photoRejectReason.trim();
+      }
+
+      const res = await fetch(
+        `/api/v1/admin/restrooms/${detail.id}/photos/${photo.id}/decision`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-idempotency-key": crypto.randomUUID(),
+          },
+          body: JSON.stringify(payload),
+        }
+      );
+
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error?.message || "사진 심사 처리 중 오류가 발생했습니다.");
+      }
+
+      setRejectingPhotoId(null);
+      setPhotoRejectReason("");
+      setDecisionSuccessMessage(
+        decision === "approve"
+          ? photo.replaces_photo_id
+            ? "새 사진이 승인되어 기존 사진을 교체했습니다."
+            : "새 사진이 승인되어 공개되었습니다."
+          : "새 사진이 반려되었으며 기존 승인 사진이 유지됩니다."
+      );
+
+      await openDetail(detail.id, { preserveSuccessMessage: true });
+      fetchRestrooms();
+    } catch (err: unknown) {
+      setDecisionErrorMessage(
+        err instanceof Error ? err.message : "사진 심사 처리 중 오류가 발생했습니다."
+      );
+    } finally {
+      setIsSubmittingPhotoDecision(false);
+    }
+  };
+
   // Eligibility check for publishing
   const canPublish = (item: AdminRestroomSummaryItem | AdminRestroomDetail) => {
     const hasName = Boolean(item.name?.trim());
@@ -209,6 +275,7 @@ export default function AdminRestroomsClient() {
         {(
           [
             { id: "pending", label: "심사 대기 (pending)" },
+            { id: "pending_photos", label: "사진 교체 대기" },
             { id: "published", label: "공개 중 (published)" },
             { id: "suspended", label: "공개 중단 (suspended)" },
             { id: "all", label: "전체 (all)" },
@@ -299,6 +366,11 @@ export default function AdminRestroomsClient() {
                         {item.type === "partner" ? "제휴 화장실" : "공공 화장실"}
                       </span>
                       <RestroomStatusBadge status={item.publication_status} />
+                      {(item.pending_photo_count ?? 0) > 0 && (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                          📸 대기 사진 {item.pending_photo_count}건
+                        </span>
+                      )}
                     </div>
                     <h2 className="mt-1 text-sm font-bold text-slate-900 dark:text-white truncate">
                       {item.name}
@@ -524,7 +596,164 @@ export default function AdminRestroomsClient() {
                   )}
                 </div>
 
-                {/* 4. 감사 로그 (Audit Logs) */}
+                {/* 4. 화장실 사진 미리보기 및 교체 검수 */}
+                <div
+                  data-testid="admin-restroom-photos-section"
+                  className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-800/40 space-y-2.5 min-w-0"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-slate-900 dark:text-white">
+                      첨부 사진 ({detail.photos?.length ?? 0}건)
+                    </span>
+                    {detail.publication_status !== "published" &&
+                      (detail.photos || []).some((p) => p.moderation_status === "pending") && (
+                        <span className="text-[11px] font-semibold text-blue-700 dark:text-blue-300">
+                          공개 승인 시 대기 사진 함께 승인됨
+                        </span>
+                      )}
+                  </div>
+
+                  {!detail.photos || detail.photos.length === 0 ? (
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      첨부된 화장실 사진이 없습니다.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                      {detail.photos.map((photo) => {
+                        const targetOld = photo.replaces_photo_id
+                          ? detail.photos.find((old) => old.id === photo.replaces_photo_id)
+                          : null;
+
+                        return (
+                          <div
+                            key={photo.id}
+                            data-testid={`admin-photo-card-${photo.id}`}
+                            className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-white p-2.5 dark:border-slate-700 dark:bg-slate-900"
+                          >
+                            <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-slate-200 dark:bg-slate-800">
+                              {photo.image_url ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={photo.image_url}
+                                  alt={PHOTO_TYPE_LABELS[photo.photo_type] || "화장실 사진"}
+                                  className="h-full w-full object-cover"
+                                />
+                              ) : (
+                                <div className="flex h-full items-center justify-center text-[11px] text-slate-500">
+                                  미리보기 URL 없음 ({PHOTO_TYPE_LABELS[photo.photo_type] || photo.photo_type})
+                                </div>
+                              )}
+                              {photo.is_primary && (
+                                <span className="absolute left-1.5 top-1.5 rounded bg-blue-600 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                                  대표
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="flex items-center justify-between gap-1 text-[11px]">
+                              <span className="font-semibold text-slate-800 dark:text-slate-200">
+                                {PHOTO_TYPE_LABELS[photo.photo_type] || photo.photo_type}
+                              </span>
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                                  photo.moderation_status === "approved"
+                                    ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+                                    : photo.moderation_status === "pending"
+                                    ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                                    : "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                                }`}
+                              >
+                                {photo.moderation_status === "approved"
+                                  ? "승인됨"
+                                  : photo.moderation_status === "pending"
+                                  ? photo.replaces_photo_id
+                                    ? "교체 대기"
+                                    : "승인 대기"
+                                  : "반려/교체됨"}
+                              </span>
+                            </div>
+
+                            {photo.replaces_photo_id && (
+                              <p className="text-[11px] text-blue-700 dark:text-blue-300">
+                                ↻ 기존 승인 사진({targetOld ? PHOTO_TYPE_LABELS[targetOld.photo_type] : photo.replaces_photo_id.slice(0, 8)}) 교체 요청
+                              </p>
+                            )}
+
+                            {/* 이미 공개된 화장실의 대기 사진 개별 승인/반려 */}
+                            {detail.publication_status === "published" &&
+                              photo.moderation_status === "pending" && (
+                                <div className="space-y-2 border-t border-slate-100 pt-2 dark:border-slate-800">
+                                  {rejectingPhotoId === photo.id ? (
+                                    <div className="space-y-1.5">
+                                      <textarea
+                                        rows={2}
+                                        value={photoRejectReason}
+                                        onChange={(e) => setPhotoRejectReason(e.target.value)}
+                                        placeholder="사진 반려 사유 입력 (2자 이상)"
+                                        data-testid={`photo-reject-reason-${photo.id}`}
+                                        className="w-full rounded-lg border border-slate-300 bg-white p-2 text-[11px] text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                                      />
+                                      <div className="flex gap-1.5">
+                                        <button
+                                          type="button"
+                                          disabled={isSubmittingPhotoDecision}
+                                          onClick={() =>
+                                            void handlePhotoReplacementDecision(photo, "reject")
+                                          }
+                                          data-testid={`confirm-reject-photo-btn-${photo.id}`}
+                                          className="min-h-[36px] flex-1 rounded-lg bg-rose-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+                                        >
+                                          반려 확정
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setRejectingPhotoId(null);
+                                            setPhotoRejectReason("");
+                                          }}
+                                          className="min-h-[36px] rounded-lg border border-slate-300 px-2.5 py-1 text-[11px] font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-300"
+                                        >
+                                          취소
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="flex gap-1.5">
+                                      <button
+                                        type="button"
+                                        disabled={isSubmittingPhotoDecision}
+                                        onClick={() =>
+                                          void handlePhotoReplacementDecision(photo, "approve")
+                                        }
+                                        data-testid={`approve-photo-btn-${photo.id}`}
+                                        className="min-h-[36px] flex-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                                      >
+                                        {photo.replaces_photo_id ? "승인 (교체)" : "사진 승인"}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={isSubmittingPhotoDecision}
+                                        onClick={() => {
+                                          setRejectingPhotoId(photo.id);
+                                          setPhotoRejectReason("");
+                                        }}
+                                        data-testid={`reject-photo-btn-${photo.id}`}
+                                        className="min-h-[36px] rounded-lg bg-rose-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+                                      >
+                                        반려
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* 5. 감사 로그 (Audit Logs) */}
                 {detail.audit_logs && detail.audit_logs.length > 0 && (
                   <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-800/40 space-y-2 min-w-0">
                     <span className="font-bold text-slate-900 dark:text-white">

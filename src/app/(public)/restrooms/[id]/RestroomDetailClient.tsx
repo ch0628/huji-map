@@ -9,6 +9,7 @@ import type {
 } from "@/lib/restrooms/types";
 import MapDirectionsModal from "@/components/map/MapDirectionsModal";
 import DepositPaymentButton from "@/components/payment/DepositPaymentButton";
+import { PublicRestroomPhotoGallery } from "@/components/restroom/RestroomPhotoManager";
 import { useEventTracker } from "@/lib/events/hooks";
 
 export interface RestroomDetailClientProps {
@@ -370,24 +371,11 @@ export default function RestroomDetailClient({
         </div>
       )}
 
-      {/* 사진 갤러리 */}
-      {restroom.photos && restroom.photos.length > 0 && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <h2 className="text-sm font-bold text-slate-900 dark:text-white mb-3">
-            📸 현장 사진
-          </h2>
-          <div className="grid grid-cols-2 gap-2">
-            {restroom.photos.map((photo) => (
-              <div
-                key={photo.id}
-                className="relative aspect-video rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-xs text-slate-400"
-              >
-                <span>화장실 사진 ({photo.photo_type})</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* 사진 갤러리 (승인된 사진만 표시) */}
+      <PublicRestroomPhotoGallery
+        restroomName={restroom.name}
+        photos={restroom.photos}
+      />
 
       {/* 길찾기 모달 */}
       <MapDirectionsModal

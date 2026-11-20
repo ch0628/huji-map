@@ -8,6 +8,7 @@ import RestroomStatusBadge from "@/components/restroom/RestroomStatusBadge";
 import RestroomForm from "@/components/restroom/RestroomForm";
 import RestroomPolicyManager from "@/components/restroom/RestroomPolicyManager";
 import RestroomPinManager from "@/components/restroom/RestroomPinManager";
+import RestroomPhotoManager from "@/components/restroom/RestroomPhotoManager";
 import RestroomReviewSubmit from "@/components/restroom/RestroomReviewSubmit";
 
 interface RestroomDetailData extends Restroom {
@@ -28,8 +29,10 @@ export default function RestroomDetailClient({ restroomId }: RestroomDetailClien
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const fetchDetail = useCallback(async () => {
-    setIsLoading(true);
+  const fetchDetail = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setIsLoading(true);
+    }
     setErrorCode(null);
     setErrorMessage(null);
 
@@ -130,7 +133,7 @@ export default function RestroomDetailClient({ restroomId }: RestroomDetailClien
         <p className="leading-relaxed">{errorMessage || "정보를 불러올 수 없습니다."}</p>
         <button
           type="button"
-          onClick={fetchDetail}
+          onClick={() => void fetchDetail()}
           className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700"
         >
           다시 시도
@@ -206,7 +209,15 @@ export default function RestroomDetailClient({ restroomId }: RestroomDetailClien
         }}
       />
 
-      {/* 5. 화장실 정보 및 운영시간 수정 폼 */}
+      {/* 5. 화장실 사진 관리 (신규 첨부·대기 삭제·승인 후 교체) */}
+      <RestroomPhotoManager
+        mode="manage"
+        restroomId={restroom.id}
+        photos={restroom.photos || []}
+        onPhotosChanged={() => fetchDetail({ silent: true })}
+      />
+
+      {/* 6. 화장실 정보 및 운영시간 수정 폼 */}
       <div className="space-y-2">
         <h2 className="text-sm font-bold text-slate-900 dark:text-white px-1">
           화장실 정보 및 운영시간 수정

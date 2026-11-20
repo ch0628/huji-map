@@ -19,20 +19,10 @@ import PlaceSearchResults, { PlaceSearchStatus } from "./PlaceSearchResults";
 import { searchKakaoPlaces } from "@/lib/maps/place-search";
 import type { PlaceSearchFn, PlaceSearchResult } from "@/lib/maps/place-search";
 import {
-  OUT_OF_SERVICE_MESSAGE,
-  bboxAround,
   boundsCenter,
   haversineMeters,
-  isInServiceArea,
 } from "@/lib/maps/geo";
 import { useVisitorSession, useEventTracker } from "@/lib/events/hooks";
-
-const SUWON_DEFAULT_BOUNDS: MapBounds = {
-  south: 37.24,
-  west: 126.98,
-  north: 37.31,
-  east: 127.06,
-};
 
 export interface MapDiscoveryClientProps {
   readonly initialRestroomId?: string;
@@ -51,10 +41,14 @@ export interface MapDiscoveryClientProps {
 type AnchorMode = "search" | "user" | "center";
 
 const SEARCH_DEBOUNCE_MS = 350;
-/** 프로그래밍 이동 직후 애니메이션 중 bounds 이벤트를 수동 이동으로 오인하지 않는 시간 */
+const NEARBY_RADIUS_M = 400;
+const NEARBY_LIMIT = 100;
+/** 프로그래밍 이동 직후 애니메이션 중 bounds/zoom 이벤트를 수동 이동으로 오인하지 않는 시간 */
 const PROGRAMMATIC_MOVE_GRACE_MS = 1500;
 /** 이 거리 이상 지도 중심이 벗어나면 사용자가 직접 이동한 것으로 간주 */
 const MANUAL_PAN_THRESHOLD_M = 400;
+/** 프로그래밍 이동 목표 좌표와의 허용 오차(m) */
+const PROGRAMMATIC_MOVE_TOLERANCE_M = 50;
 
 async function defaultRestroomSearch(
   keyword: string
@@ -82,7 +76,6 @@ export default function MapDiscoveryClient({
 }: MapDiscoveryClientProps) {
   const [center, setCenter] = useState<LatLng>(SUWON_DEFAULT_CENTER);
   const [zoomLevel, setZoomLevel] = useState<number>(DEFAULT_ZOOM_LEVEL);
-  const [bounds, setBounds] = useState<MapBounds | null>(null);
 
   const [filterType, setFilterType] =
     useState<RestroomFilterType>(initialFilterType);
@@ -120,17 +113,24 @@ export default function MapDiscoveryClient({
     point: LatLng;
   } | null>(null);
   const [anchorMode, setAnchorMode] = useState<AnchorMode>("center");
-  const [viewCenter, setViewCenter] = useState<LatLng | null>(null);
+  const [searchedCenter, setSearchedCenter] =
+    useState<LatLng>(SUWON_DEFAULT_CENTER);
+  const [showSearchHere, setShowSearchHere] = useState<boolean>(false);
 
   const searchSeqRef = useRef(0);
+  const fetchSeqRef = useRef(0);
   const searchTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const currentMapCenterRef = useRef<LatLng>(SUWON_DEFAULT_CENTER);
   const lastMoveRef = useRef<{ point: LatLng; at: number }>({
     point: SUWON_DEFAULT_CENTER,
-    at: 0,
+    at: Date.now(),
+  });
+  const lastZoomRef = useRef<{ zoom: number; at: number }>({
+    zoom: DEFAULT_ZOOM_LEVEL,
+    at: Date.now(),
   });
 
   const abortControllerRef = useRef<AbortController | null>(null);
-  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const mapProviderRef = useRef<MapProvider | null>(null);
 
   // 방문자 세션 초기화 및 이벤트 추적기 연동
@@ -151,16 +151,75 @@ export default function MapDiscoveryClient({
     trackLandingView();
   }, [trackLandingView]);
 
-  // 최초 마운트 시 기본 수원 권역 화장실 목록 조회
+  // 중심 좌표 기반 주변 화장실 단일 API 요청 (거리순 최대 100건)
+  const fetchRestrooms = useCallback(
+    async (targetCenter: LatLng, targetType: RestroomFilterType) => {
+      // 진행 중인 이전 요청 취소
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      const seq = ++fetchSeqRef.current;
+
+      setIsLoading(true);
+      setApiError(null);
+
+      try {
+        const params = new URLSearchParams({
+          centerLat: String(targetCenter.lat),
+          centerLng: String(targetCenter.lng),
+          radiusM: String(NEARBY_RADIUS_M),
+          type: targetType,
+          limit: String(NEARBY_LIMIT),
+        });
+        const url = `/api/v1/restrooms?${params.toString()}`;
+        const res = await fetch(url, { signal: controller.signal });
+        if (!res.ok) {
+          throw new Error(`API 응답 오류: ${res.status}`);
+        }
+        const json = await res.json();
+        if (!(json.ok && json.data)) {
+          throw new Error(json.error?.message || "화장실 목록 조회 실패");
+        }
+        if (controller.signal.aborted || seq !== fetchSeqRef.current) {
+          return;
+        }
+        const rawItems: PublicRestroomSummary[] = Array.isArray(json.data.items)
+          ? json.data.items
+          : [];
+        const seen = new Set<string>();
+        const items = rawItems.filter((r) =>
+          seen.has(r.id) ? false : (seen.add(r.id), true)
+        );
+        setSearchedCenter(targetCenter);
+        setRawRestrooms(items);
+        onRestroomsLoaded?.(items);
+      } catch (err: any) {
+        if (
+          err?.name === "AbortError" ||
+          controller.signal.aborted ||
+          seq !== fetchSeqRef.current
+        ) {
+          return; // 이전 요청 취소/무효화 시 상태 및 로딩 유지
+        }
+        setApiError(err?.message || "화장실 정보를 가져오지 못했습니다.");
+      } finally {
+        if (seq === fetchSeqRef.current) {
+          setIsLoading(false);
+        }
+      }
+    },
+    [onRestroomsLoaded]
+  );
+
+  // 최초 마운트 시 현재 지도 중심 기준으로 1회만 조회
   useEffect(() => {
-    fetchRestrooms(SUWON_DEFAULT_BOUNDS, filterType);
+    fetchRestrooms(SUWON_DEFAULT_CENTER, filterType);
 
     return () => {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
-      }
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
       }
       if (searchTimerRef.current) {
         clearTimeout(searchTimerRef.current);
@@ -169,98 +228,47 @@ export default function MapDiscoveryClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // BBox 기반 화장실 목록 API 요청
-  const fetchRestrooms = useCallback(
-    async (targetBounds: MapBounds, targetType: RestroomFilterType) => {
-      // 진행 중인 이전 요청 취소
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-
-      setIsLoading(true);
-      setApiError(null);
-
-      try {
-        const bboxParam = `${targetBounds.south},${targetBounds.west},${targetBounds.north},${targetBounds.east}`;
-        const PAGE_SIZE = 100;
-        const MAX_PAGES = 10; // 안전 상한 (최대 1,000건)
-        const collected: PublicRestroomSummary[] = [];
-        let total = Infinity;
-
-        for (
-          let page = 0;
-          page < MAX_PAGES && collected.length < total;
-          page++
-        ) {
-          const url = `/api/v1/restrooms?bbox=${encodeURIComponent(
-            bboxParam
-          )}&type=${targetType}&limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`;
-          const res = await fetch(url, { signal: controller.signal });
-          if (!res.ok) {
-            throw new Error(`API 응답 오류: ${res.status}`);
-          }
-          const json = await res.json();
-          if (!(json.ok && json.data)) {
-            throw new Error(json.error?.message || "화장실 목록 조회 실패");
-          }
-          const pageItems: PublicRestroomSummary[] = json.data.items ?? [];
-          collected.push(...pageItems);
-          total = typeof json.data.total === "number" ? json.data.total : 0;
-          if (pageItems.length === 0) break;
-        }
-
-        const seen = new Set<string>();
-        const items = collected.filter((r) =>
-          seen.has(r.id) ? false : (seen.add(r.id), true)
-        );
-        setRawRestrooms(items);
-        onRestroomsLoaded?.(items);      } catch (err: any) {
-        if (err.name === "AbortError") {
-          return; // 디바운스에 의한 정상 취소
-        }
-        setApiError(err.message || "화장실 정보를 가져오지 못했습니다.");
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [onRestroomsLoaded]
-  );
-
   // 프로그래밍 방식 지도 이동 (사용자 직접 이동과 구분하기 위해 기록)
   const moveTo = useCallback((point: LatLng) => {
     lastMoveRef.current = { point, at: Date.now() };
+    currentMapCenterRef.current = point;
     setCenter(point);
   }, []);
 
-  // 지도 bounds 변경 시 디바운스 호출
-  const handleBoundsChanged = useCallback(
-    (newBounds: MapBounds) => {
-      setBounds(newBounds);
+  const setProgrammaticZoom = useCallback((level: number) => {
+    lastZoomRef.current = { zoom: level, at: Date.now() };
+    setZoomLevel(level);
+  }, []);
 
-      const vc = boundsCenter(newBounds);
-      setViewCenter(vc);
+  // 지도 bounds 변경 시: 자동 재조회 없이 수동 재검색 버튼만 표시
+  const handleBoundsChanged = useCallback((newBounds: MapBounds) => {
+    const vc = boundsCenter(newBounds);
+    currentMapCenterRef.current = vc;
 
-      // 프로그래밍 이동이 아닌 사용자 직접 이동이면 탐색 기준을 지도 중심으로 갱신
-      const last = lastMoveRef.current;
-      if (
-        Date.now() - last.at > PROGRAMMATIC_MOVE_GRACE_MS &&
-        haversineMeters(vc, last.point) > MANUAL_PAN_THRESHOLD_M
-      ) {
+    const last = lastMoveRef.current;
+    const isProgrammaticMove =
+      Date.now() - last.at <= PROGRAMMATIC_MOVE_GRACE_MS &&
+      haversineMeters(vc, last.point) <= PROGRAMMATIC_MOVE_TOLERANCE_M;
+
+    if (!isProgrammaticMove) {
+      setShowSearchHere(true);
+      if (haversineMeters(vc, last.point) > MANUAL_PAN_THRESHOLD_M) {
         setAnchorMode("center");
       }
+    }
+  }, []);
 
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
-
-      debounceTimerRef.current = setTimeout(() => {
-        fetchRestrooms(newBounds, filterType);
-      }, 350);
-    },
-    [fetchRestrooms, filterType]
-  );
+  // 지도 줌 변경 시: 자동 재조회 없이 수동 재검색 버튼만 표시
+  const handleZoomChanged = useCallback((newZoom: number) => {
+    setZoomLevel(newZoom);
+    const last = lastZoomRef.current;
+    const isProgrammaticZoom =
+      Date.now() - last.at <= PROGRAMMATIC_MOVE_GRACE_MS &&
+      last.zoom === newZoom;
+    if (!isProgrammaticZoom) {
+      setShowSearchHere(true);
+    }
+  }, []);
 
   // 장소 + 공개 화장실 이름 병렬 검색 실행 (최신 요청만 반영)
   const runPlaceSearch = useCallback(
@@ -355,7 +363,7 @@ export default function MapDiscoveryClient({
     [runPlaceSearch]
   );
 
-  // 카카오 장소 검색 결과 선택: 해당 좌표로 이동 + 초록 마커 표시 + 주변 화장실 재조회
+  // 카카오 장소 검색 결과 선택: 해당 좌표로 이동 + 초록 마커 표시 + 주변 화장실 1회 재조회 (전국 지원)
   const handleSelectPlace = useCallback(
     (place: PlaceSearchResult) => {
       searchSeqRef.current += 1;
@@ -369,16 +377,15 @@ export default function MapDiscoveryClient({
       setSearchAnchor({ name: place.name, point });
       setAnchorMode("search");
       setSelectedRestroomId(null);
-      setZoomLevel(4);
+      setShowSearchHere(false);
+      setProgrammaticZoom(4);
       moveTo(point);
-      if (isInServiceArea(point)) {
-        fetchRestrooms(bboxAround(point), filterType);
-      }
+      fetchRestrooms(point, filterType);
     },
-    [fetchRestrooms, filterType, moveTo]
+    [fetchRestrooms, filterType, moveTo, setProgrammaticZoom]
   );
 
-  // 휴지맵 등록 화장실 검색 결과 선택: 해당 화장실 위치로 이동 + 선택 + 주변 재조회
+  // 휴지맵 등록 화장실 검색 결과 선택: 해당 화장실 위치로 이동 + 선택 + 주변 1회 재조회 (전국 지원)
   const handleSelectRestroomResult = useCallback(
     (restroom: PublicRestroomSummary) => {
       searchSeqRef.current += 1;
@@ -404,26 +411,26 @@ export default function MapDiscoveryClient({
       );
       setSelectedRestroomId(restroom.id);
       setIsSheetExpanded(false);
-      setZoomLevel(4);
+      setShowSearchHere(false);
+      setProgrammaticZoom(4);
       moveTo(point);
-      if (isInServiceArea(point)) {
-        fetchRestrooms(bboxAround(point), nextFilterType);
-      }
+      fetchRestrooms(point, nextFilterType);
     },
-    [fetchRestrooms, filterType, moveTo]
+    [fetchRestrooms, filterType, moveTo, setProgrammaticZoom]
   );
 
-  // 필터 타입 변경 시 즉시 재조회
+  // 필터 타입 변경 시 현재 지도 중심 기준 1회 재조회
   const handleFilterTypeChange = useCallback(
     (newType: RestroomFilterType) => {
+      if (newType === filterType) return;
       setFilterType(newType);
-      const targetBounds = bounds ?? SUWON_DEFAULT_BOUNDS;
-      fetchRestrooms(targetBounds, newType);
+      setShowSearchHere(false);
+      fetchRestrooms(currentMapCenterRef.current, newType);
     },
-    [bounds, fetchRestrooms]
+    [fetchRestrooms, filterType]
   );
 
-  // 탐색 기준점 (검색 장소 > 내 위치 > 지도 중심)
+  // 탐색 기준점 (검색 장소 > 내 위치 > 마지막 조회 지도 중심)
   const reference = useMemo(() => {
     if (anchorMode === "search" && searchAnchor) {
       return {
@@ -435,21 +442,12 @@ export default function MapDiscoveryClient({
       return { point: userLocation, label: "내 위치 기준 가까운 순" };
     }
     return {
-      point: viewCenter ?? center,
+      point: searchedCenter,
       label: "지도 중심 기준 가까운 순",
     };
-  }, [anchorMode, searchAnchor, userLocation, viewCenter, center]);
+  }, [anchorMode, searchAnchor, userLocation, searchedCenter]);
 
-  // 서비스 지역(수원시) 밖 여부
-  const isOutOfService = useMemo(() => {
-    const focus =
-      anchorMode === "search" && searchAnchor
-        ? searchAnchor.point
-        : (viewCenter ?? center);
-    return !isInServiceArea(focus);
-  }, [anchorMode, searchAnchor, viewCenter, center]);
-
-  // 기준점으로부터의 거리순 정렬 (공공/제휴 필터는 서버 조회 + 클라이언트 이중 적용)
+  // 기준점으로부터의 거리순 정렬 (서버 거리순 우선, 공공/제휴 필터 이중 적용)
   const { filteredRestrooms, distancesById } = useMemo(() => {
     let list = rawRestrooms;
     if (filterType === "public") {
@@ -458,12 +456,18 @@ export default function MapDiscoveryClient({
       list = list.filter((r) => r.type === "partner");
     }
 
+    const useServerDistance =
+      haversineMeters(reference.point, searchedCenter) < 1;
+
     const distances: Record<string, number> = {};
     const withDistance = list.map((r) => {
-      const d = haversineMeters(reference.point, {
-        lat: r.latitude,
-        lng: r.longitude,
-      });
+      const d =
+        useServerDistance && typeof r.distance_meters === "number"
+          ? r.distance_meters
+          : haversineMeters(reference.point, {
+              lat: r.latitude,
+              lng: r.longitude,
+            });
       distances[r.id] = d;
       return { r, d };
     });
@@ -473,7 +477,7 @@ export default function MapDiscoveryClient({
       filteredRestrooms: withDistance.map((x) => x.r),
       distancesById: distances,
     };
-  }, [rawRestrooms, filterType, reference]);
+  }, [rawRestrooms, filterType, reference, searchedCenter]);
 
 
   // 선택된 화장실 객체
@@ -562,31 +566,51 @@ export default function MapDiscoveryClient({
       setUserLocation(result.coords);
       setAnchorMode("user");
       setSearchAnchor(null);
+      setShowSearchHere(false);
       moveTo(result.coords);
+      fetchRestrooms(result.coords, filterType);
       setLocationNotice("현재 위치로 이동했습니다.");
       setTimeout(() => setLocationNotice(null), 3500);
     } else {
       setLocationNotice(
         result.error?.message ||
-          "위치 정보를 가져올 수 없어 수원시 기본 위치로 유지합니다."
+          "위치 정보를 가져올 수 없어 기본 위치로 유지합니다."
       );
       setTimeout(() => setLocationNotice(null), 5000);
     }
-  }, [moveTo]);
+  }, [fetchRestrooms, filterType, moveTo]);
 
-  // 줌 제어 핸들러
+  // 이 지역에서 재검색 버튼 핸들러
+  const handleSearchHereClick = useCallback(() => {
+    setAnchorMode("center");
+    setShowSearchHere(false);
+    fetchRestrooms(currentMapCenterRef.current, filterType);
+  }, [fetchRestrooms, filterType]);
+
+  // 줌 제어 핸들러 (자동 재조회 없이 수동 재검색 버튼 표시)
   const handleZoomIn = () => {
-    setZoomLevel((prev) => Math.max(1, prev - 1)); // 카카오맵은 레벨이 작을수록 확대
+    const next = Math.max(1, zoomLevel - 1); // 카카오맵은 레벨이 작을수록 확대
+    if (next !== zoomLevel) {
+      setZoomLevel(next);
+      setShowSearchHere(true);
+    }
   };
 
   const handleZoomOut = () => {
-    setZoomLevel((prev) => Math.min(14, prev + 1));
+    const next = Math.min(14, zoomLevel + 1);
+    if (next !== zoomLevel) {
+      setZoomLevel(next);
+      setShowSearchHere(true);
+    }
   };
 
   const handleResetCenter = () => {
+    const target = userLocation ?? SUWON_DEFAULT_CENTER;
     setSearchAnchor(null);
     setAnchorMode(userLocation ? "user" : "center");
-    moveTo(userLocation ?? SUWON_DEFAULT_CENTER);
+    setShowSearchHere(false);
+    moveTo(target);
+    fetchRestrooms(target, filterType);
   };
 
   return (
@@ -595,47 +619,40 @@ export default function MapDiscoveryClient({
       className="relative flex flex-1 h-full w-full flex-col overflow-hidden bg-slate-100 dark:bg-slate-900"
     >
       {/* 상단 검색 및 필터 바 (바텀시트보다 상위 z-index 유지) */}
-      <div className="absolute top-2 left-2 right-2 z-40">
-        <MapFilterBar
-          searchKeyword={searchKeyword}
-          onSearchChange={handleSearchChange}
-          onSearchSubmit={handleSearchSubmit}
-          filterType={filterType}
-          onFilterTypeChange={handleFilterTypeChange}
-          onCurrentLocationClick={handleCurrentLocationClick}
-          isLocating={isLocating}
-          totalCount={filteredRestrooms.length}
-          isLoading={isLoading}
-        />
+      <div className="pointer-events-none absolute top-2 left-2 right-2 z-40">
+        <div className="pointer-events-auto">
+          <MapFilterBar
+            searchKeyword={searchKeyword}
+            onSearchChange={handleSearchChange}
+            onSearchSubmit={handleSearchSubmit}
+            filterType={filterType}
+            onFilterTypeChange={handleFilterTypeChange}
+            onCurrentLocationClick={handleCurrentLocationClick}
+            isLocating={isLocating}
+            totalCount={filteredRestrooms.length}
+            isLoading={isLoading}
+          />
+        </div>
 
         {/* 지역/장소 + 휴지맵 화장실 검색 결과 (선택 전에는 지도 이동 없음) */}
-        <PlaceSearchResults
-          status={searchStatus}
-          results={searchResults}
-          restroomResults={restroomSearchResults}
-          partialWarning={searchPartialWarning}
-          query={searchKeyword.trim()}
-          onSelect={handleSelectPlace}
-          onSelectRestroom={handleSelectRestroomResult}
-          onRetry={() => runPlaceSearch(searchKeyword)}
-        />
-
-        {/* 서비스 지역 밖 안내 */}
-        {isOutOfService && (
-          <div
-            data-testid="out-of-service-banner"
-            role="status"
-            className="mt-1.5 rounded-xl bg-amber-100 px-3 py-2 text-xs font-medium text-amber-900 shadow-lg dark:bg-amber-900 dark:text-amber-100"
-          >
-            {OUT_OF_SERVICE_MESSAGE}
-          </div>
-        )}
+        <div className="pointer-events-auto">
+          <PlaceSearchResults
+            status={searchStatus}
+            results={searchResults}
+            restroomResults={restroomSearchResults}
+            partialWarning={searchPartialWarning}
+            query={searchKeyword.trim()}
+            onSelect={handleSelectPlace}
+            onSelectRestroom={handleSelectRestroomResult}
+            onRetry={() => runPlaceSearch(searchKeyword)}
+          />
+        </div>
 
         {/* 위치 권한 거부 또는 상태 안내 토스트 */}
         {locationNotice && (
           <div
             data-testid="location-notice-banner"
-            className="mt-1.5 rounded-xl bg-slate-900/90 px-3 py-2 text-xs font-medium text-white shadow-lg backdrop-blur-sm dark:bg-white/90 dark:text-slate-900 animate-in fade-in duration-150"
+            className="pointer-events-auto mt-1.5 rounded-xl bg-slate-900/90 px-3 py-2 text-xs font-medium text-white shadow-lg backdrop-blur-sm dark:bg-white/90 dark:text-slate-900 animate-in fade-in duration-150"
           >
             <span>ℹ️ {locationNotice}</span>
           </div>
@@ -645,15 +662,32 @@ export default function MapDiscoveryClient({
         {apiError && (
           <div
             data-testid="api-error-banner"
-            className="mt-1.5 flex items-center justify-between rounded-xl bg-red-600/90 px-3 py-2 text-xs font-medium text-white shadow-lg backdrop-blur-sm"
+            className="pointer-events-auto mt-1.5 flex items-center justify-between rounded-xl bg-red-600/90 px-3 py-2 text-xs font-medium text-white shadow-lg backdrop-blur-sm"
           >
             <span>⚠️ {apiError}</span>
             <button
               type="button"
-              onClick={() => bounds && fetchRestrooms(bounds, filterType)}
+              onClick={() =>
+                fetchRestrooms(currentMapCenterRef.current, filterType)
+              }
               className="ml-2 rounded bg-white/20 px-2 py-0.5 text-[11px] font-semibold hover:bg-white/30"
             >
               다시 시도
+            </button>
+          </div>
+        )}
+
+        {/* 지도 이동·확대·축소 시 표시되는 수동 재검색 버튼 (상단 중앙) */}
+        {showSearchHere && (
+          <div className="mt-2 flex justify-center pointer-events-none">
+            <button
+              type="button"
+              onClick={handleSearchHereClick}
+              data-testid="search-this-area-btn"
+              className="pointer-events-auto inline-flex min-h-[36px] items-center gap-1.5 rounded-full bg-slate-900/95 px-4 py-1.5 text-xs font-semibold text-white shadow-lg backdrop-blur-sm transition hover:bg-slate-800 active:scale-95 dark:bg-white/95 dark:text-slate-900"
+            >
+              <span aria-hidden="true">🔄</span>
+              <span>이 지역에서 재검색</span>
             </button>
           </div>
         )}
@@ -667,14 +701,17 @@ export default function MapDiscoveryClient({
           markers={markers}
           providerFactory={providerFactory}
           onBoundsChanged={handleBoundsChanged}
+          onZoomChanged={handleZoomChanged}
           onMapReady={(provider) => {
             mapProviderRef.current = provider;
-            try {
-              const currentBounds = provider.getBounds();
-              handleBoundsChanged(currentBounds);
-            } catch {
-              // 초기화 직후 bounds 미생성 시 무시
-            }
+            lastMoveRef.current = {
+              point: currentMapCenterRef.current,
+              at: Date.now(),
+            };
+            lastZoomRef.current = {
+              zoom: zoomLevel,
+              at: Date.now(),
+            };
             trackMapLoaded({
               zoom: zoomLevel,
               restroomCount: rawRestrooms.length,
@@ -710,7 +747,7 @@ export default function MapDiscoveryClient({
           type="button"
           onClick={handleResetCenter}
           data-testid="map-recenter-btn"
-          aria-label="수원 중심 복귀"
+          aria-label="중심 위치로 복귀"
           title="중심 위치로 복귀"
           className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white/95 text-xs text-slate-700 shadow-md backdrop-blur-sm hover:bg-slate-50 active:scale-95 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
         >

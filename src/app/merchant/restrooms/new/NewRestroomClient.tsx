@@ -118,7 +118,7 @@ export default function NewRestroomClient({
             id="new-restroom-business-select"
             value={selectedBusinessId}
             onChange={(e) => setSelectedBusinessId(e.target.value)}
-            className="flex-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white min-h-[36px]"
+            className="min-w-0 w-full flex-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white min-h-[36px]"
           >
             {businesses.map((b) => (
               <option key={b.id} value={b.id}>
