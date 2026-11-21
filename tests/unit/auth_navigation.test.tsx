@@ -410,7 +410,7 @@ describe("작업 B: 인증·역할별 진입 흐름 및 내비게이션", () => 
       ).toBe("/merchant/businesses");
     });
 
-    it("/admin 대시보드는 비로그인 401, 일반회원 403을 차단하고 관리자만 5개 운영 메뉴를 렌더링한다", async () => {
+    it("/admin 대시보드는 비로그인 401, 일반회원 403을 차단하고 관리자만 6개 운영 메뉴를 렌더링한다", async () => {
       // Guest -> 401
       mockGetServerAuthSession.mockResolvedValueOnce({
         user: null,
@@ -453,9 +453,11 @@ describe("작업 B: 인증·역할별 진입 흐름 및 내비게이션", () => 
       expect(screen.getByTestId("admin-card-businesses")).toBeDefined();
       expect(screen.getByTestId("admin-card-restrooms")).toBeDefined();
       expect(screen.getByTestId("admin-card-receipts")).toBeDefined();
+      expect(screen.getByTestId("admin-card-refunds").getAttribute("href")).toBe(
+        "/admin/refunds"
+      );
       expect(screen.getByTestId("admin-card-leads")).toBeDefined();
       expect(screen.getByTestId("admin-card-pmf")).toBeDefined();
-      expect(screen.queryByText(/환급 관리자/)).toBeNull();
     });
   });
 });

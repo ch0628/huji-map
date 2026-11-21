@@ -35,7 +35,7 @@ vi.mock("@/lib/supabase/server", () => {
 });
 
 import { requireAuth } from "@/lib/auth";
-import { createAdminClient } from "@/lib/supabase/server";
+import { createAdminClient, createServerClientInstance } from "@/lib/supabase/server";
 
 describe("TASK 21: Toss Payments API Routes Integration", () => {
   const originalEnv = process.env;
@@ -345,6 +345,95 @@ describe("TASK 21: Toss Payments API Routes Integration", () => {
       expect(json.data.order.status).toBe("approved");
       expect(json.data.order.provider_payment_key).toBeUndefined();
       expect(json.data.order.idempotency_key).toBeUndefined();
+    });
+
+    it("selects only explicit safe access_sessions columns (excluding idempotency_key) when access_session_id exists", async () => {
+      vi.mocked(requireAuth).mockResolvedValueOnce({
+        user: { id: "user-1" } as any,
+        roles: ["customer"],
+        isAdmin: false,
+        isMerchant: false,
+        displayName: "User 1",
+        accountStatus: "active",
+        profileExists: true,
+        sessionExpired: false,
+        configReady: true,
+      });
+
+      const mockAdminClient: any = {
+        from: () => ({
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: {
+                  id: "ord-uuid-1",
+                  access_session_id: "ses-uuid-1",
+                  user_id: "user-1",
+                  order_id: "hm_ord_001",
+                  provider: "toss",
+                  payment_mode: "test",
+                  amount_krw: 1000,
+                  status: "approved",
+                  provider_payment_key: "SECRET_KEY_MUST_BE_OMITTED",
+                  idempotency_key: "SECRET_IDEM_KEY_MUST_BE_OMITTED",
+                  approved_at: new Date().toISOString(),
+                  failure_code: null,
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString(),
+                },
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      };
+      vi.mocked(createAdminClient).mockReturnValue(mockAdminClient);
+
+      let selectedColumns = "";
+      const mockServerClient: any = {
+        from: (table: string) => {
+          expect(table).toBe("access_sessions");
+          return {
+            select: (cols: string) => {
+              selectedColumns = cols;
+              return {
+                eq: () => ({
+                  maybeSingle: async () => ({
+                    data: {
+                      id: "ses-uuid-1",
+                      user_id: "user-1",
+                      restroom_id: "restroom-1",
+                      policy_id: "policy-1",
+                      status: "authorized",
+                      access_method_snapshot: "pin",
+                      authorized_at: new Date().toISOString(),
+                      code_revealed_at: null,
+                      expires_at: new Date(Date.now() + 86400000).toISOString(),
+                      created_at: new Date().toISOString(),
+                      updated_at: new Date().toISOString(),
+                    },
+                    error: null,
+                  }),
+                }),
+              };
+            },
+          };
+        },
+      };
+      vi.mocked(createServerClientInstance)
+        .mockResolvedValueOnce({} as any)
+        .mockResolvedValueOnce(mockServerClient);
+
+      const req = new Request("http://localhost:3000/api/v1/payments/orders/hm_ord_001");
+      const res = await handleGetOrder(req, { params: Promise.resolve({ id: "hm_ord_001" }) });
+      expect(res.status).toBe(200);
+      expect(selectedColumns).not.toBe("*");
+      expect(selectedColumns).not.toContain("idempotency_key");
+      expect(selectedColumns).toContain("access_method_snapshot");
+      const json = await res.json();
+      expect(json.data.accessSession.id).toBe("ses-uuid-1");
+      expect(json.data.accessSession.status).toBe("authorized");
+      expect(json.data.accessSession.idempotency_key).toBeUndefined();
     });
   });
 });

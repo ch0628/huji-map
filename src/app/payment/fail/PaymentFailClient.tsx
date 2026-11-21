@@ -126,7 +126,7 @@ export default function PaymentFailClient() {
 
           {recheckedOrder?.status === "approved" && (
             <Link
-              href={`/payment/success?orderId=${orderId}&paymentKey=rechecked&amount=${recheckedOrder.amount_krw}`}
+              href={`/payment/success?orderId=${encodeURIComponent(orderId)}`}
               className="flex min-h-[48px] w-full items-center justify-center rounded-xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-md hover:bg-emerald-700 text-center"
             >
               승인된 이용권 화면으로 이동

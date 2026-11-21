@@ -713,5 +713,42 @@ describe("TASK 22: Toss Payments UI & Mobile Checkout Integration Tests", () => 
         ).toBeTruthy();
       });
     });
+
+    it("links to /payment/success without synthetic paymentKey=rechecked when order is already approved", async () => {
+      mockSearchParams = new URLSearchParams({
+        code: "PAY_PROCESS_ABORTED",
+        message: "오류 발생",
+        orderId: "hm_ord_approved_123",
+      });
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          data: {
+            order: {
+              order_id: "hm_ord_approved_123",
+              status: "approved",
+              amount_krw: 1000,
+            },
+          },
+        }),
+      });
+      global.fetch = mockFetch;
+
+      render(<PaymentFailClient />);
+
+      const recheckBtn = screen.getByTestId("recheck-order-btn");
+      await act(async () => {
+        fireEvent.click(recheckBtn);
+      });
+
+      await waitFor(() => {
+        const link = screen.getByText("승인된 이용권 화면으로 이동").closest("a");
+        expect(link).toBeTruthy();
+        expect(link?.getAttribute("href")).toBe("/payment/success?orderId=hm_ord_approved_123");
+      });
+    });
   });
 });

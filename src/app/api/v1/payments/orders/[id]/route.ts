@@ -9,6 +9,9 @@ import {
   PaymentServiceError,
 } from "@/lib/payments";
 
+const SAFE_ACCESS_SESSION_COLUMNS =
+  "id, user_id, restroom_id, policy_id, status, access_method_snapshot, authorized_at, code_revealed_at, expires_at, created_at, updated_at";
+
 export async function GET(
   request: Request,
   context: { params: Promise<{ id: string }> }
@@ -79,7 +82,7 @@ export async function GET(
       const supabase = await createServerClientInstance();
       const { data: sessionData } = await supabase
         .from("access_sessions")
-        .select("*")
+        .select(SAFE_ACCESS_SESSION_COLUMNS)
         .eq("id", order.access_session_id)
         .maybeSingle();
 

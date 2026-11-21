@@ -34,6 +34,13 @@ const ADMIN_TOOLS = [
     testId: "admin-card-receipts",
   },
   {
+    href: "/admin/refunds",
+    title: "테스트 환급 관리",
+    description: "영수증 승인 완료 주문 확인, Toss 테스트 전액 취소 요청 및 상태 재조회",
+    icon: "💸",
+    testId: "admin-card-refunds",
+  },
+  {
     href: "/admin/leads",
     title: "가게 리드 50곳 관리",
     description: "H1 실험 모수 가게 목록 및 접촉 시도 이력 관리",
