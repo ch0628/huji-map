@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { UserRoleType } from "@/lib/db/types";
+import { openAnalyticsSettingsModal } from "@/lib/events/client";
 
 export interface HeaderAuthState {
   readonly authenticated: boolean;
@@ -68,14 +69,8 @@ function getPrimaryNavItems(auth: HeaderAuthState): NavItem[] {
         testId: "nav-link-admin-receipts",
       },
       {
-        href: "/admin/leads",
-        label: "리드 관리",
-        icon: "📋",
-        testId: "nav-link-admin-leads",
-      },
-      {
         href: "/admin/analytics/pmf",
-        label: "PMF 분석",
+        label: "이용 분석",
         icon: "📊",
         testId: "nav-link-admin-pmf",
       },
@@ -321,6 +316,26 @@ export default function HeaderNavClient({ auth }: HeaderNavClientProps) {
               </ul>
             </div>
           )}
+
+          {/* 이용 통계 설정 (모든 사용자 접근 가능) */}
+          <div className="mt-2 border-t border-slate-100 pt-2 dark:border-slate-800">
+            <ul className="space-y-1">
+              <li>
+                <button
+                  type="button"
+                  data-testid="nav-link-privacy-settings"
+                  onClick={() => {
+                    setIsOpen(false);
+                    openAnalyticsSettingsModal();
+                  }}
+                  className="flex min-h-[44px] w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                >
+                  <span aria-hidden="true">⚙️</span>
+                  <span>이용 통계 설정</span>
+                </button>
+              </li>
+            </ul>
+          </div>
 
           {/* 로그아웃 */}
           {auth.authenticated && (

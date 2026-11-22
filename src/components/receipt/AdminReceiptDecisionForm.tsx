@@ -14,6 +14,7 @@ import {
   type AdminReceiptDecisionApiResponse,
   type DecisionFormPayload,
 } from "./admin-types";
+import { focusFirstErrorField } from "@/lib/forms/validation-ux";
 
 export interface AdminReceiptDecisionFormProps {
   readonly receipt: AdminReceiptListItem;
@@ -50,6 +51,7 @@ export function AdminReceiptDecisionForm({
   const [isConfirmStepOpen, setIsConfirmStepOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [apiError, setApiError] = useState<{
     status: number | null;
     code: string | null;
@@ -103,54 +105,87 @@ export function AdminReceiptDecisionForm({
   const reviewable = isReceiptReviewable(receipt.submissionStatus);
 
   const buildValidatedPayload = (): DecisionFormPayload | null => {
+    const errors: Record<string, string> = {};
+
     if (!selectedDecision) {
-      setValidationError("심사 판정(승인, 재제출 요청, 반려)을 선택해 주세요.");
-      return null;
+      errors.decision = "심사 판정(승인, 재제출 요청, 반려)을 선택해 주세요.";
     }
 
     const trimmedReason = reason.trim();
-    if (trimmedReason.length < 2 || trimmedReason.length > 500) {
-      setValidationError(
-        "심사 사유는 공백 제외 최소 2자 이상 500자 이하로 입력해야 합니다."
-      );
-      return null;
+    if (trimmedReason.length === 0) {
+      errors.reason = "심사 사유를 입력해 주세요.";
+    } else if (trimmedReason.length < 2 || trimmedReason.length > 500) {
+      errors.reason =
+        "심사 사유는 공백 제외 최소 2자 이상 500자 이하로 입력해야 합니다.";
     }
 
     const trimmedStore = confirmedStore.trim();
     if (trimmedStore.length > 100) {
-      setValidationError("확인된 가게 상호명은 100자 이하여야 합니다.");
-      return null;
+      errors.confirmedStore = "확인된 가게 상호명은 100자 이하여야 합니다.";
     }
 
     let isoPurchaseAt: string | null = null;
     if (confirmedPurchaseAt.trim()) {
       const parsedDate = Date.parse(confirmedPurchaseAt.trim());
       if (Number.isNaN(parsedDate)) {
-        setValidationError("유효한 구매 날짜 및 시각을 입력해 주세요.");
-        return null;
+        errors.confirmedPurchaseAt = "유효한 구매 날짜 및 시각을 입력해 주세요.";
+      } else {
+        isoPurchaseAt = new Date(parsedDate).toISOString();
       }
-      isoPurchaseAt = new Date(parsedDate).toISOString();
     }
 
     let parsedAmount: number | null = null;
     if (confirmedAmount.trim() !== "") {
       const numeric = Number(confirmedAmount.trim());
       if (!Number.isInteger(numeric) || numeric < 0) {
-        setValidationError("확인 구매금액은 0원 이상의 정수로 입력해 주세요.");
-        return null;
+        errors.confirmedAmount = "확인 구매금액은 0원 이상의 정수로 입력해 주세요.";
+      } else {
+        parsedAmount = numeric;
       }
-      parsedAmount = numeric;
     }
 
     const trimmedRef = receiptReference.trim();
     if (trimmedRef.length > 100) {
-      setValidationError("영수증 참조 식별자는 100자 이하여야 합니다.");
+      errors.receiptReference = "영수증 참조 식별자는 100자 이하여야 합니다.";
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      setValidationError(
+        errors.decision ||
+          errors.reason ||
+          errors.confirmedStore ||
+          errors.confirmedPurchaseAt ||
+          errors.confirmedAmount ||
+          errors.receiptReference ||
+          "입력 항목을 확인해 주세요."
+      );
+      focusFirstErrorField(
+        [
+          "decision",
+          "confirmedStore",
+          "confirmedPurchaseAt",
+          "confirmedAmount",
+          "receiptReference",
+          "reason",
+        ],
+        errors,
+        {
+          decision: `decision-option-approved-${receipt.id}`,
+          confirmedStore: `confirmed-store-${receipt.id}`,
+          confirmedPurchaseAt: `confirmed-purchase-at-${receipt.id}`,
+          confirmedAmount: `confirmed-amount-${receipt.id}`,
+          receiptReference: `receipt-reference-${receipt.id}`,
+          reason: `review-reason-${receipt.id}`,
+        }
+      );
       return null;
     }
 
+    setFieldErrors({});
     setValidationError(null);
     return {
-      decision: selectedDecision,
+      decision: selectedDecision!,
       reason: trimmedReason,
       confirmedStore: trimmedStore || null,
       confirmedPurchaseAt: isoPurchaseAt,
@@ -392,9 +427,16 @@ export function AdminReceiptDecisionForm({
 
       <form onSubmit={handleReviewBeforeSubmit} className="mt-3 space-y-3" noValidate>
         {/* 판정 버튼 그룹 */}
-        <fieldset disabled={isSubmitting}>
+        <fieldset
+          disabled={isSubmitting}
+          className={
+            fieldErrors.decision
+              ? "rounded-xl border border-rose-400 p-2.5 bg-rose-50/30 dark:bg-rose-950/20"
+              : undefined
+          }
+        >
           <legend className="mb-1.5 font-semibold text-slate-800 dark:text-slate-200">
-            판정 선택 *
+            판정 선택 <span className="text-rose-500">*</span>
           </legend>
           <div className="grid grid-cols-1 gap-2">
             {(
@@ -405,6 +447,11 @@ export function AdminReceiptDecisionForm({
               return (
                 <button
                   key={decisionKey}
+                  id={
+                    decisionKey === "approved"
+                      ? `decision-option-approved-${receipt.id}`
+                      : undefined
+                  }
                   type="button"
                   data-testid={`decision-option-${decisionKey}`}
                   aria-pressed={isSelected}
@@ -412,6 +459,13 @@ export function AdminReceiptDecisionForm({
                     setSelectedDecision(decisionKey);
                     setIsConfirmStepOpen(false);
                     setValidationError(null);
+                    if (fieldErrors.decision) {
+                      setFieldErrors((prev) => {
+                        const next = { ...prev };
+                        delete next.decision;
+                        return next;
+                      });
+                    }
                   }}
                   className={`flex min-h-[44px] flex-col items-start rounded-xl border p-2.5 text-left transition ${
                     isSelected
@@ -431,6 +485,15 @@ export function AdminReceiptDecisionForm({
               );
             })}
           </div>
+          {fieldErrors.decision && (
+            <p
+              id={`decision-error-${receipt.id}`}
+              role="alert"
+              className="mt-1.5 text-xs font-medium text-rose-600 dark:text-rose-400"
+            >
+              {fieldErrors.decision}
+            </p>
+          )}
         </fieldset>
 
         {/* 확인된 비교 정보 (선택 입력) */}
@@ -539,7 +602,7 @@ export function AdminReceiptDecisionForm({
               htmlFor={`review-reason-${receipt.id}`}
               className="font-semibold text-slate-800 dark:text-slate-200"
             >
-              심사 사유 (필수, 2~500자) *
+              심사 사유 (필수, 2~500자) <span className="text-rose-500">*</span>
             </label>
             <span className="text-[11px] text-slate-400">
               {reason.trim().length}/500
@@ -553,13 +616,39 @@ export function AdminReceiptDecisionForm({
             required
             disabled={isSubmitting}
             value={reason}
+            aria-invalid={Boolean(fieldErrors.reason)}
+            aria-describedby={
+              fieldErrors.reason ? `review-reason-error-${receipt.id}` : undefined
+            }
             onChange={(e) => {
-              setReason(e.target.value);
+              const nextVal = e.target.value;
+              setReason(nextVal);
               setIsConfirmStepOpen(false);
+              if (nextVal.trim().length >= 2 && fieldErrors.reason) {
+                setFieldErrors((prev) => {
+                  const next = { ...prev };
+                  delete next.reason;
+                  return next;
+                });
+                setValidationError(null);
+              }
             }}
             placeholder="예: 제휴 매장 구매 영수증 상호·구매시각·금액 확인 완료 / 사진 흐림으로 재촬영 요청"
-            className="w-full rounded-xl border border-slate-300 bg-white p-3 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+            className={`w-full rounded-xl border bg-white p-3 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-900 dark:text-white ${
+              fieldErrors.reason
+                ? "border-rose-500 ring-1 ring-rose-500/30"
+                : "border-slate-300 dark:border-slate-700"
+            }`}
           />
+          {fieldErrors.reason && (
+            <p
+              id={`review-reason-error-${receipt.id}`}
+              role="alert"
+              className="mt-1 text-xs font-medium text-rose-600 dark:text-rose-400"
+            >
+              {fieldErrors.reason}
+            </p>
+          )}
         </div>
 
         {/* 1단계 제출 버튼 (최종 확인 전 검토) */}

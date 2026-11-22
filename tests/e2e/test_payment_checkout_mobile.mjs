@@ -122,7 +122,14 @@ async function runTests() {
     // Step 1: 무료 공공 화장실 상세 화면 — 결제 버튼 일체 비노출
     // =========================================================================
     console.log("\n>>> Step 1: Public Restroom Detail — NO payment button verification...");
-    await page.goto(`${BASE_URL}/restrooms/a1111111-1111-4111-8111-111111111111`);
+    await page.goto(`${BASE_URL}/restrooms/a1111111-1111-4111-8111-111111111111`, {
+      waitUntil: "networkidle",
+    });
+    const consentDecline = page.locator('[data-testid="consent-decline-btn"]');
+    if (await consentDecline.isVisible().catch(() => false)) {
+      await consentDecline.click();
+      await page.locator('[data-testid="first-visit-consent-modal"]').waitFor({ state: "hidden" });
+    }
     await page.waitForSelector('[data-testid="detail-directions-btn"]');
     await checkNoHorizontalOverflow("Step 1 - Public Restroom Detail");
 
@@ -207,7 +214,11 @@ async function runTests() {
         return {
           payment: ({ customerKey }) => ({
             requestPayment: async (params) => {
-              window.__e2e_sdk_params = { clientKey, customerKey, params };
+              const sdkData = { clientKey, customerKey, params };
+              window.__e2e_sdk_params = sdkData;
+              try {
+                window.sessionStorage.setItem("__e2e_sdk_params", JSON.stringify(sdkData));
+              } catch {}
               // Simulate Toss SDK redirection to successUrl with query params
               const target = new URL(params.successUrl);
               target.searchParams.set("paymentKey", "toss_pk_live_mock_secret_key_val");
@@ -298,7 +309,15 @@ async function runTests() {
     await checkNoHorizontalOverflow("Step 4 - Payment Confirmed View");
 
     // 4.7 Verify order creation API contract & customerKey format
-    const sdkParams = await page.evaluate(() => window.__e2e_sdk_params);
+    const sdkParams = await page.evaluate(() => {
+      if (window.__e2e_sdk_params) return window.__e2e_sdk_params;
+      try {
+        const raw = window.sessionStorage.getItem("__e2e_sdk_params");
+        return raw ? JSON.parse(raw) : null;
+      } catch {
+        return null;
+      }
+    });
     if (!sdkParams || !sdkParams.customerKey) {
       throw new Error("SDK params or customerKey missing!");
     }
@@ -330,7 +349,7 @@ async function runTests() {
     }
 
     const confirmedSessionStatus = await page.textContent('[data-testid="confirmed-session-status"]');
-    if (!confirmedSessionStatus.includes("authorized")) {
+    if (!confirmedSessionStatus.includes("이용권 활성화")) {
       throw new Error(`Expected authorized session status, got: ${confirmedSessionStatus}`);
     }
     console.log("  ✓ (4.4) Success view renders approved order and authorized access session.");

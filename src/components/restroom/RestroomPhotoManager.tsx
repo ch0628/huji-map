@@ -273,7 +273,7 @@ export default function RestroomPhotoManager(props: RestroomPhotoManagerProps) {
         <div className="flex items-center justify-between gap-2">
           <div>
             <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-              6. 화장실 사진 첨부 (선택 · 최대 {MAX_RESTROOM_PHOTOS}장)
+              5. 화장실 사진 첨부 (선택 · 최대 {MAX_RESTROOM_PHOTOS}장)
             </h3>
             <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
               JPG, PNG, WebP (장당 최대 10MB). 첨부한 사진은 관리자 화장실 승인 시 함께 공개됩니다.
@@ -699,7 +699,8 @@ export default function RestroomPhotoManager(props: RestroomPhotoManagerProps) {
 }
 
 /**
- * Shared read-only public gallery for approved restroom photos.
+ * Shared read-only public photo slider with lightbox zoom for approved restroom photos (max 3).
+ * Follows horizontal scroll-snap carousel accessibility and touch ergonomics.
  */
 export function PublicRestroomPhotoGallery({
   restroomName,
@@ -708,40 +709,295 @@ export function PublicRestroomPhotoGallery({
   restroomName: string;
   photos?: PublicRestroomPhoto[];
 }) {
-  if (!photos || photos.length === 0) return null;
+  const visiblePhotos = React.useMemo(
+    () =>
+      (photos ?? [])
+        .filter((p) => !("moderation_status" in p) || (p as { moderation_status?: string }).moderation_status === "approved")
+        .slice(0, 3),
+    [photos]
+  );
+
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [zoomIndex, setZoomIndex] = useState<number | null>(null);
+  const [loadedMap, setLoadedMap] = useState<Record<string, boolean>>({});
+  const [failedMap, setFailedMap] = useState<Record<string, boolean>>({});
+  const [liveStatus, setLiveStatus] = useState("");
+  const scrollRafRef = useRef<number | null>(null);
+
+  React.useEffect(() => {
+    setActiveIndex(0);
+    setZoomIndex(null);
+  }, [visiblePhotos.length]);
+
+  React.useEffect(() => {
+    if (zoomIndex === null) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setZoomIndex(null);
+      } else if (e.key === "ArrowLeft" && visiblePhotos.length > 1) {
+        setZoomIndex((prev) =>
+          prev === null ? null : (prev - 1 + visiblePhotos.length) % visiblePhotos.length
+        );
+      } else if (e.key === "ArrowRight" && visiblePhotos.length > 1) {
+        setZoomIndex((prev) =>
+          prev === null ? null : (prev + 1) % visiblePhotos.length
+        );
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [zoomIndex, visiblePhotos.length]);
+
+  if (visiblePhotos.length === 0) return null;
+
+  const total = visiblePhotos.length;
+  const clampedActive = Math.min(activeIndex, total - 1);
+
+  const goToSlide = (nextIdx: number) => {
+    const normalized = ((nextIdx % total) + total) % total;
+    setActiveIndex(normalized);
+    setLiveStatus(`${normalized + 1} / ${total}번째 사진`);
+    const track = trackRef.current;
+    if (track && typeof track.scrollTo === "function") {
+      track.scrollTo({
+        left: normalized * track.clientWidth,
+        behavior: "smooth",
+      });
+    }
+  };
+
+  const handleTrackScroll = () => {
+    if (scrollRafRef.current !== null) return;
+    scrollRafRef.current = window.requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      const track = trackRef.current;
+      if (!track || track.clientWidth <= 0) return;
+      const idx = Math.round(track.scrollLeft / track.clientWidth);
+      const bounded = Math.max(0, Math.min(total - 1, idx));
+      if (bounded !== activeIndex) {
+        setActiveIndex(bounded);
+        setLiveStatus(`${bounded + 1} / ${total}번째 사진`);
+      }
+    });
+  };
+
+  const zoomedPhoto = zoomIndex !== null ? visiblePhotos[zoomIndex] : null;
 
   return (
-    <div
+    <section
       data-testid="public-restroom-photos-section"
-      className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900"
+      role="region"
+      aria-roledescription="carousel"
+      aria-label={`${restroomName} 화장실 사진`}
+      className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900"
     >
-      <h2 className="text-sm font-bold text-slate-900 dark:text-white mb-3">
-        📸 현장 사진
-      </h2>
-      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-        {photos.map((photo) => (
+      <div className="relative overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-800">
+        {/* 좌우 네이티브 스와이프 트랙 */}
+        <div
+          ref={trackRef}
+          tabIndex={0}
+          role="group"
+          aria-label="사진 슬라이드"
+          data-testid="restroom-photo-slider-track"
+          onScroll={handleTrackScroll}
+          style={{
+            overscrollBehaviorX: "contain",
+            touchAction: "manipulation",
+            scrollbarWidth: "none",
+          }}
+          className="flex snap-x snap-mandatory overflow-x-auto scroll-smooth focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 [&::-webkit-scrollbar]:hidden"
+        >
+          {visiblePhotos.map((photo, idx) => {
+            const label = PHOTO_TYPE_LABELS[photo.photo_type] || photo.photo_type || "현장 사진";
+            const isLoaded = Boolean(loadedMap[photo.id]);
+            const isFailed = Boolean(failedMap[photo.id]) || !photo.image_url;
+
+            return (
+              <div
+                key={photo.id}
+                role="group"
+                aria-roledescription="slide"
+                aria-label={`${idx + 1} / ${total} ${label}`}
+                data-testid={`public-restroom-photo-${photo.id}`}
+                className="relative h-52 w-full flex-[0_0_100%] snap-center sm:h-64"
+              >
+                {isFailed ? (
+                  <div className="flex h-full w-full flex-col items-center justify-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+                    <span aria-hidden="true">🖼️</span>
+                    <span>사진을 불러올 수 없습니다.</span>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid={`public-restroom-photo-zoom-btn-${idx}`}
+                    aria-label={`${label} 크게 보기 (${idx + 1}/${total})`}
+                    onClick={() => setZoomIndex(idx)}
+                    className="relative block h-full w-full cursor-zoom-in focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+                  >
+                    {!isLoaded && (
+                      <div
+                        aria-hidden="true"
+                        className="absolute inset-0 animate-pulse bg-slate-200 dark:bg-slate-700"
+                      />
+                    )}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={photo.image_url!}
+                      alt={`${restroomName} ${label}`}
+                      onLoad={() =>
+                        setLoadedMap((prev) => ({ ...prev, [photo.id]: true }))
+                      }
+                      onError={() =>
+                        setFailedMap((prev) => ({ ...prev, [photo.id]: true }))
+                      }
+                      className="h-full w-full object-cover"
+                    />
+                  </button>
+                )}
+
+                <span className="pointer-events-none absolute bottom-2.5 left-2.5 rounded-md bg-slate-900/75 px-2 py-0.5 text-[11px] font-medium text-white">
+                  {photo.is_primary ? "대표 · " : ""}
+                  {label}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* 사진 순서 표시 */}
+        <span
+          data-testid="restroom-photo-counter"
+          className="pointer-events-none absolute right-2.5 top-2.5 rounded-full bg-slate-900/75 px-2.5 py-0.5 text-[11px] font-semibold text-white"
+        >
+          {clampedActive + 1} / {total}
+        </span>
+
+        {/* 이전 / 다음 버튼 (2장 이상일 때) */}
+        {total > 1 && (
+          <div className="pointer-events-none absolute inset-y-0 left-0 right-0 flex items-center justify-between px-2">
+            <button
+              type="button"
+              data-testid="restroom-photo-prev-btn"
+              aria-label="이전 사진"
+              onClick={() => goToSlide(clampedActive - 1)}
+              className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full bg-slate-900/65 text-white shadow hover:bg-slate-900/85 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              data-testid="restroom-photo-next-btn"
+              aria-label="다음 사진"
+              onClick={() => goToSlide(clampedActive + 1)}
+              className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full bg-slate-900/65 text-white shadow hover:bg-slate-900/85 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+            >
+              ›
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* 하단 슬라이드 점 표시 (2장 이상일 때, >=24px 터치 영역) */}
+      {total > 1 && (
+        <nav
+          aria-label="사진 선택"
+          className="mt-2 flex items-center justify-center gap-1"
+        >
+          {visiblePhotos.map((photo, idx) => {
+            const isCurrent = idx === clampedActive;
+            return (
+              <button
+                key={photo.id}
+                type="button"
+                data-testid={`restroom-photo-dot-${idx}`}
+                aria-label={`${idx + 1}번째 사진으로 이동`}
+                aria-current={isCurrent ? "true" : undefined}
+                onClick={() => goToSlide(idx)}
+                className="flex min-h-[24px] min-w-[24px] items-center justify-center"
+              >
+                <span
+                  className={`block h-2 rounded-full transition-all ${
+                    isCurrent
+                      ? "w-5 bg-slate-800 dark:bg-white"
+                      : "w-2 bg-slate-300 dark:bg-slate-600"
+                  }`}
+                />
+              </button>
+            );
+          })}
+        </nav>
+      )}
+
+      <p className="sr-only" role="status" aria-live="polite">
+        {liveStatus}
+      </p>
+
+      {/* 사진 확대 모달 */}
+      {zoomedPhoto && zoomIndex !== null && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="화장실 사진 확대 보기"
+          data-testid="restroom-photo-zoom-modal"
+          onClick={() => setZoomIndex(null)}
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/85 p-4"
+        >
           <div
-            key={photo.id}
-            data-testid={`public-restroom-photo-${photo.id}`}
-            className="relative aspect-video rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-xs text-slate-500"
+            onClick={(e) => e.stopPropagation()}
+            className="relative flex w-full max-w-2xl flex-col items-center gap-3"
           >
-            {photo.image_url ? (
+            <div className="flex w-full items-center justify-between text-xs text-white">
+              <span className="font-semibold">
+                {zoomIndex + 1} / {total} ·{" "}
+                {PHOTO_TYPE_LABELS[zoomedPhoto.photo_type] || "현장 사진"}
+              </span>
+              <button
+                type="button"
+                data-testid="restroom-photo-zoom-close-btn"
+                aria-label="확대 보기 닫기"
+                onClick={() => setZoomIndex(null)}
+                className="flex h-10 w-10 items-center justify-center rounded-lg text-white hover:bg-white/15"
+              >
+                ✕
+              </button>
+            </div>
+
+            {zoomedPhoto.image_url && (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={photo.image_url}
-                alt={`${restroomName} ${PHOTO_TYPE_LABELS[photo.photo_type] || "현장 사진"}`}
-                className="h-full w-full object-cover"
+                src={zoomedPhoto.image_url}
+                alt={`${restroomName} 확대 사진`}
+                data-testid="restroom-photo-zoom-img"
+                className="max-h-[75vh] w-full rounded-xl object-contain"
               />
-            ) : (
-              <span>{PHOTO_TYPE_LABELS[photo.photo_type] || photo.photo_type}</span>
             )}
-            <span className="absolute bottom-1.5 left-1.5 rounded bg-slate-900/75 px-2 py-0.5 text-[10px] font-semibold text-white">
-              {photo.is_primary ? "대표 · " : ""}
-              {PHOTO_TYPE_LABELS[photo.photo_type] || photo.photo_type}
-            </span>
+
+            {total > 1 && (
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  aria-label="이전 확대 사진"
+                  onClick={() =>
+                    setZoomIndex((zoomIndex - 1 + total) % total)
+                  }
+                  className="min-h-[40px] rounded-xl bg-white/15 px-4 py-2 text-xs font-semibold text-white hover:bg-white/25"
+                >
+                  ‹ 이전
+                </button>
+                <button
+                  type="button"
+                  aria-label="다음 확대 사진"
+                  onClick={() => setZoomIndex((zoomIndex + 1) % total)}
+                  className="min-h-[40px] rounded-xl bg-white/15 px-4 py-2 text-xs font-semibold text-white hover:bg-white/25"
+                >
+                  다음 ›
+                </button>
+              </div>
+            )}
           </div>
-        ))}
-      </div>
-    </div>
+        </div>
+      )}
+    </section>
   );
 }

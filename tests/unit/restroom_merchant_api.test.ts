@@ -801,6 +801,67 @@ describe("TASK 12 — Merchant Restroom Management API", () => {
       expect(json.data.deposit_amount_krw).toBe(0);
       expect(json.data.refund_eligible).toBe(false);
     });
+
+    it("3.11 TASK-04: rejects identical policy re-application on API/fallback with 409 POLICY_UNCHANGED without creating a new version", async () => {
+      mockAuthSession(merchantOwnerId);
+      const client = createMockSupabase();
+      vi.spyOn(serverSupabase, "createServerClientInstance").mockResolvedValue(client);
+
+      const initialPolicyCount = policies.length;
+
+      // Active policy on partnerRestroomId is test_deposit(1000, refund=true, window=24, min=0)
+      const dupReq = new Request(
+        `http://localhost/api/v1/merchant/restrooms/${partnerRestroomId}/policies`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-idempotency-key": "idem-policy-dup-001",
+          },
+          body: JSON.stringify({
+            policy_mode: "deposit_with_ad",
+            deposit_amount_krw: 1000,
+            receipt_window_hours: 24,
+            min_purchase_krw: 0,
+            is_active: true,
+          }),
+        }
+      );
+      const dupRes = await merchantRestroomPolicyPost(dupReq, {
+        params: Promise.resolve({ id: partnerRestroomId }),
+      });
+      expect(dupRes.status).toBe(409);
+      const dupJson = await dupRes.json();
+      expect(dupJson.error.code).toBe("POLICY_UNCHANGED");
+      expect(policies).toHaveLength(initialPolicyCount);
+
+      // Changing min_purchase_krw (e.g. 0 -> 3000) creates a new version
+      const changedReq = new Request(
+        `http://localhost/api/v1/merchant/restrooms/${partnerRestroomId}/policies`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-idempotency-key": "idem-policy-chg-001",
+          },
+          body: JSON.stringify({
+            policy_mode: "deposit_with_ad",
+            deposit_amount_krw: 1000,
+            receipt_window_hours: 24,
+            min_purchase_krw: 3000,
+            is_active: true,
+          }),
+        }
+      );
+      const changedRes = await merchantRestroomPolicyPost(changedReq, {
+        params: Promise.resolve({ id: partnerRestroomId }),
+      });
+      expect(changedRes.status).toBe(201);
+      const changedJson = await changedRes.json();
+      expect(changedJson.data.version).toBe(2);
+      expect(changedJson.data.min_purchase_krw).toBe(3000);
+      expect(policies).toHaveLength(initialPolicyCount + 1);
+    });
   });
 
   // ==========================================================================
@@ -860,6 +921,8 @@ describe("TASK 12 — Merchant Restroom Management API", () => {
       await db.exec(m5);
       const m6 = fs.readFileSync(path.join(ROOT, "supabase/migrations/20261111000000_restroom_merchant_operations.sql"), "utf8");
       await db.exec(m6);
+      const m7 = fs.readFileSync(path.join(ROOT, "supabase/migrations/20261123010000_prevent_duplicate_restroom_policy.sql"), "utf8");
+      await db.exec(m7);
 
       // Create users & approved business (in superuser context)
       await db.exec(`
@@ -1267,17 +1330,53 @@ describe("TASK 12 — Merchant Restroom Management API", () => {
       expect(policyRes.rows[0].is_active).toBe(true);
     });
 
-    it("4.11.1 applies default values (1000 KRW, refund_eligible=true, receipt_window=24h) when optional parameters are omitted in test_deposit mode", async () => {
+    it("4.11.1 blocks identical test_deposit RPC call with HM002 and applies default values (1000 KRW, refund_eligible=true, receipt_window=24h) when transitioning from free", async () => {
       await db.exec(`
         SET ROLE authenticated;
         SET request.jwt.claim.sub = '${testMerchantUid}';
         SET request.jwt.claim.role = 'authenticated';
       `);
 
-      // Invoke policy change with only restroom_id and access_mode
+      // atomicRestroomId already has v1 test_deposit(1000, true, 24, 0) -> identical call must fail with HM002
+      let identicalErr: any;
+      try {
+        await db.query(`
+          SELECT * FROM public.create_merchant_restroom_policy(
+            '${atomicRestroomId}',
+            'test_deposit'
+          );
+        `);
+      } catch (e) {
+        identicalErr = e;
+      }
+      expect(identicalErr).toBeDefined();
+      expect(identicalErr.code).toBe("HM002");
+
+      // Create a free restroom first, then transition to test_deposit with omitted optional parameters
+      const freeForDefaultRes: any = await db.query(`
+        SELECT * FROM public.create_merchant_restroom(
+          '${testBizId}',
+          '기본값 검증용 무료 화장실',
+          null,
+          '수원시 팔달구 매산로 11',
+          null,
+          37.28,
+          127.01,
+          null,
+          null,
+          'unknown',
+          null,
+          null,
+          null,
+          'ask_staff',
+          'free'
+        );
+      `);
+      const freeForDefaultId = freeForDefaultRes.rows[0].id;
+
       const res: any = await db.query(`
         SELECT * FROM public.create_merchant_restroom_policy(
-          '${atomicRestroomId}',
+          '${freeForDefaultId}',
           'test_deposit'
         );
       `);
@@ -1310,13 +1409,28 @@ describe("TASK 12 — Merchant Restroom Management API", () => {
         );
       `);
 
-      expect(res.rows[0].version).toBe(3);
+      expect(res.rows[0].version).toBe(2);
       expect(res.rows[0].access_mode).toBe("free");
       expect(res.rows[0].deposit_amount_krw).toBe(0);
       expect(res.rows[0].refund_eligible).toBe(false);
       expect(res.rows[0].receipt_window_hours).toBeNull();
       expect(res.rows[0].min_purchase_krw).toBe(0);
       expect(res.rows[0].is_active).toBe(true);
+
+      // Re-invoking free mode with different ignored args must still be blocked with HM002
+      let dupFreeErr: any;
+      try {
+        await db.query(`
+          SELECT * FROM public.create_merchant_restroom_policy(
+            '${atomicRestroomId}',
+            'free'
+          );
+        `);
+      } catch (e) {
+        dupFreeErr = e;
+      }
+      expect(dupFreeErr).toBeDefined();
+      expect(dupFreeErr.code).toBe("HM002");
     });
 
     it("4.11.3 creates new version with explicit deposit amount change and preserves single active policy", async () => {
@@ -1337,7 +1451,7 @@ describe("TASK 12 — Merchant Restroom Management API", () => {
         );
       `);
 
-      expect(res.rows[0].version).toBe(4);
+      expect(res.rows[0].version).toBe(3);
       expect(res.rows[0].access_mode).toBe("test_deposit");
       expect(res.rows[0].deposit_amount_krw).toBe(3500);
       expect(res.rows[0].refund_eligible).toBe(true);
@@ -1352,33 +1466,38 @@ describe("TASK 12 — Merchant Restroom Management API", () => {
         WHERE restroom_id = '${atomicRestroomId}' AND is_active = true;
       `);
       expect(activeRes.rows).toHaveLength(1);
-      expect(activeRes.rows[0].version).toBe(4);
+      expect(activeRes.rows[0].version).toBe(3);
       expect(activeRes.rows[0].deposit_amount_krw).toBe(3500);
+
+      // Concurrent duplicate calls with identical 3500/true/48/500 must only keep v3
+      const results = await Promise.allSettled([
+        db.query(`SELECT * FROM public.create_merchant_restroom_policy('${atomicRestroomId}', 'test_deposit', 3500, true, 48, 500);`),
+        db.query(`SELECT * FROM public.create_merchant_restroom_policy('${atomicRestroomId}', 'test_deposit', 3500, true, 48, 500);`),
+      ]);
+      expect(results.every((r) => r.status === "rejected")).toBe(true);
     });
 
-    it("4.11.4 preserves full policy history (v1..v4) and blocks direct INSERT and UPDATE mutations (42501)", async () => {
+    it("4.11.4 preserves full policy history (v1..v3) and blocks direct INSERT and UPDATE mutations (42501)", async () => {
       await db.exec(`
         SET ROLE authenticated;
         SET request.jwt.claim.sub = '${testMerchantUid}';
         SET request.jwt.claim.role = 'authenticated';
       `);
 
-      // 1. Check all 4 versions exist in chronological order
+      // 1. Check all 3 versions exist in chronological order
       const allRes: any = await db.query(`
         SELECT version, access_mode, deposit_amount_krw, refund_eligible, is_active
         FROM public.restroom_access_policies
         WHERE restroom_id = '${atomicRestroomId}'
         ORDER BY version ASC;
       `);
-      expect(allRes.rows).toHaveLength(4);
+      expect(allRes.rows).toHaveLength(3);
       expect(allRes.rows[0].version).toBe(1);
       expect(allRes.rows[0].is_active).toBe(false);
       expect(allRes.rows[1].version).toBe(2);
       expect(allRes.rows[1].is_active).toBe(false);
       expect(allRes.rows[2].version).toBe(3);
-      expect(allRes.rows[2].is_active).toBe(false);
-      expect(allRes.rows[3].version).toBe(4);
-      expect(allRes.rows[3].is_active).toBe(true);
+      expect(allRes.rows[2].is_active).toBe(true);
 
       // 2. Direct INSERT attack on atomicRestroomId must fail with 42501
       let insertErr: any;

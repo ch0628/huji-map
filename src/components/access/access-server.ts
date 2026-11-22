@@ -476,6 +476,30 @@ export async function getCustomerAccessSessionDetail(params: {
     now,
   });
 
+  let latestReceipt: CustomerAccessDetail["latestReceipt"] = null;
+  try {
+    const receiptRes = await supabase
+      .from("receipt_submissions")
+      .select("id, submission_status, created_at, review_reason")
+      .eq("access_session_id", publicSession.id)
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (receiptRes?.data) {
+      latestReceipt = {
+        id: receiptRes.data.id,
+        submissionStatus: receiptRes.data.submission_status,
+        createdAt: receiptRes.data.created_at,
+        reviewReason: receiptRes.data.review_reason ?? null,
+      };
+    }
+  } catch {
+    // Non-blocking fallback when receipt table is mocked out in unit tests
+    latestReceipt = null;
+  }
+
   return {
     session: publicSession,
     effectiveStatus,
@@ -486,6 +510,7 @@ export async function getCustomerAccessSessionDetail(params: {
     latestVisitConfirmation: visitConfirmations[0] ?? null,
     visitConfirmations,
     eligibleForPinReveal: eligibility.eligible,
+    latestReceipt,
   };
 }
 
@@ -598,5 +623,51 @@ export async function submitCustomerVisitConfirmation(params: {
     sessionStatus: rpcResult.session_status || "authorized",
     reused: Boolean(rpcResult.reused),
   };
+}
+
+/**
+ * Finds the authenticated customer's latest active, approved, non-refunded access session
+ * for a specific restroom. Never queries or exposes any doorlock PIN.
+ */
+export async function getLatestActiveCustomerAccessForRestroom(params: {
+  userId: string;
+  restroomId: string;
+  injectedClient?: SupabaseClient<Database>;
+}): Promise<CustomerAccessDetail | null> {
+  const { userId, restroomId, injectedClient } = params;
+  if (!userId || !UUID_REGEX.test(userId) || !restroomId || !UUID_REGEX.test(restroomId)) {
+    return null;
+  }
+
+  const items = await listCustomerAccessSessions({
+    userId,
+    limit: 30,
+    injectedClient,
+  });
+
+  const nowMs = Date.now();
+  const activeItem = items.find((item) => {
+    if (item.session.restroom_id !== restroomId) return false;
+    if (
+      item.effectiveStatus !== "authorized" &&
+      item.effectiveStatus !== "code_revealed"
+    ) {
+      return false;
+    }
+    if (item.order?.status !== "approved") return false;
+    if (item.refund) return false;
+    const expMs = new Date(item.session.expires_at).getTime();
+    return Number.isFinite(expMs) && expMs > nowMs;
+  });
+
+  if (!activeItem) {
+    return null;
+  }
+
+  return getCustomerAccessSessionDetail({
+    userId,
+    accessSessionId: activeItem.session.id,
+    injectedClient,
+  });
 }
 

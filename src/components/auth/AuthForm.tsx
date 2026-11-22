@@ -300,7 +300,9 @@ export default function AuthForm({
                   className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                 />
                 <span className="leading-relaxed">
-                  [필수] 서비스 이용약관 및 개인정보 수집·이용 안내(제휴 화장실 테스트 결제·환급 및 가게 관리 목적)에 동의합니다.
+                  [필수] 서비스 이용약관 및 필수 개인정보 수집·이용에 동의합니다.
+                  (계정 인증, 제휴 화장실 테스트 결제·이용권·영수증 환급 및 가게
+                  관리 목적이며, 선택적 이용 통계 수집은 포함되지 않음)
                 </span>
               </label>
               {fieldErrors.termsAccepted && (
@@ -360,7 +362,7 @@ export default function AuthForm({
           href="/map"
           className="flex min-h-[44px] items-center justify-center rounded-xl border border-blue-200 bg-blue-50/70 px-4 py-2.5 font-semibold text-blue-700 hover:bg-blue-100/70 dark:border-blue-900/60 dark:bg-blue-950/40 dark:text-blue-300"
         >
-          🗺️ 로그인 없이 화장실 지도 바로 보기 (비회원 이용)
+          화장실 지도 보기
         </Link>
       </div>
     </div>

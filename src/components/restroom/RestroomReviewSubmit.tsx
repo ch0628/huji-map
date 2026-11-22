@@ -136,9 +136,8 @@ export default function RestroomReviewSubmit({
         </div>
       ) : status === "pending" ? (
         <div className="rounded-xl bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-          <p className="font-semibold">⏳ 현재 관리자 심사 대기 중입니다.</p>
-          <p className="mt-1 leading-relaxed text-[11px] text-amber-800 dark:text-amber-300">
-            관리자가 화장실 위치 및 시설 정보를 검토하고 있습니다. 승인이 완료되면 공개(published) 상태로 자동 전환됩니다.
+          <p className="font-semibold" data-testid="restroom-pending-notice">
+            ⏳ 관리자 심사 대기 중입니다. 승인되면 지도에 공개됩니다.
           </p>
         </div>
       ) : status === "published" ? (

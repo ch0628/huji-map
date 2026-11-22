@@ -52,10 +52,10 @@ export function AccessMethodBadge({
     return (
       <span
         data-testid="access-method-badge"
-        className="inline-flex items-center gap-1 rounded-md bg-purple-50 px-2 py-0.5 text-[11px] font-semibold text-purple-800 border border-purple-200 dark:bg-purple-950/50 dark:text-purple-300 dark:border-purple-800/60"
+        className="inline-flex shrink-0 whitespace-nowrap items-center gap-1 rounded-md bg-purple-50 px-2 py-0.5 text-[11px] font-semibold text-purple-800 border border-purple-200 dark:bg-purple-950/50 dark:text-purple-300 dark:border-purple-800/60"
       >
-        <span>🔐</span>
-        <span>도어락 PIN</span>
+        <span aria-hidden="true">🔐</span>
+        <span>도어락 비밀번호</span>
       </span>
     );
   }
@@ -63,20 +63,20 @@ export function AccessMethodBadge({
     return (
       <span
         data-testid="access-method-badge"
-        className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-800 border border-blue-200 dark:bg-blue-950/50 dark:text-blue-300 dark:border-blue-800/60"
+        className="inline-flex shrink-0 whitespace-nowrap items-center gap-1 rounded-md bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-800 border border-blue-200 dark:bg-blue-950/50 dark:text-blue-300 dark:border-blue-800/60"
       >
-        <span>🙋</span>
-        <span>직원 문의 출입</span>
+        <span aria-hidden="true">🙋</span>
+        <span>직원 확인 이용</span>
       </span>
     );
   }
   return (
     <span
       data-testid="access-method-badge"
-      className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700 border border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
+      className="inline-flex shrink-0 whitespace-nowrap items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700 border border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700"
     >
-      <span>🚪</span>
-      <span>개방형 출입</span>
+      <span aria-hidden="true">🚪</span>
+      <span>바로 이용</span>
     </span>
   );
 }

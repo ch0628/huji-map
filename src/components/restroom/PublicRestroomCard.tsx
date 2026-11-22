@@ -18,6 +18,7 @@ export interface PublicRestroomCardProps {
   readonly onPaymentClick?: (restroom: PublicRestroomSummary) => void;
   readonly onDetailClick?: (restroom: PublicRestroomSummary) => void;
   readonly showDetailLink?: boolean;
+  readonly reserveTopRightClose?: boolean;
   /** 탐색 기준점으로부터의 거리(m) */
   readonly distanceMeters?: number;
 }
@@ -45,6 +46,7 @@ export default function PublicRestroomCard({
   onPaymentClick,
   onDetailClick,
   showDetailLink = true,
+  reserveTopRightClose = false,
   distanceMeters,
 }: PublicRestroomCardProps) {
   const isPartner = restroom.type === "partner";
@@ -65,32 +67,32 @@ export default function PublicRestroomCard({
       onClick={handleCardClick}
       className={`rounded-2xl border transition-all ${
         isSelected
-          ? "border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-slate-900 shadow-md ring-2 ring-blue-400/20"
+          ? "border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-slate-900"
           : "border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 shadow-sm hover:border-slate-300 dark:hover:border-slate-700"
       } ${compact ? "p-3.5" : "p-4"}`}
     >
       {/* 상단: 구분 뱃지 및 이름 (+ 승인된 대표 사진 썸네일) */}
-      <div className="flex items-start justify-between gap-2.5">
+      <div className={`flex items-start justify-between gap-2.5 ${reserveTopRightClose ? "pr-9" : ""}`}>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             {/* 공공 vs 제휴 구분 뱃지 */}
             {isPartner ? (
               <span
                 data-testid="restroom-type-partner-badge"
-                className="inline-flex items-center rounded-md bg-purple-100 px-2 py-0.5 text-xs font-bold text-purple-800 dark:bg-purple-950/80 dark:text-purple-300"
+                className="inline-flex shrink-0 whitespace-nowrap items-center rounded-md bg-purple-100 px-2 py-0.5 text-xs font-bold text-purple-800 dark:bg-purple-950/80 dark:text-purple-300"
               >
                 🤝 안심 제휴
               </span>
             ) : (
               <span
                 data-testid="restroom-type-public-badge"
-                className="inline-flex items-center rounded-md bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-800 dark:bg-blue-950/80 dark:text-blue-300"
+                className="inline-flex shrink-0 whitespace-nowrap items-center rounded-md bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-800 dark:bg-blue-950/80 dark:text-blue-300"
               >
                 🏛️ 무료 공공
               </span>
             )}
 
-            <h3 className="truncate text-base font-bold text-slate-900 dark:text-white">
+            <h3 className="min-w-0 break-keep truncate text-base font-bold text-slate-900 dark:text-white">
               {restroom.name}
             </h3>
           </div>
@@ -133,23 +135,26 @@ export default function PublicRestroomCard({
               </p>
             </div>
           ) : restroom.access_mode === "test_deposit" ? (
-            <div className="flex flex-col gap-0.5">
-              <div className="flex items-center justify-between gap-2 font-medium">
-                <span className="text-purple-700 dark:text-purple-300">
-                  🔒 보증금 이용 시설 (테스트 모드)
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between gap-2 font-bold">
+                <span className="text-slate-900 dark:text-white">
+                  이용 보증금{" "}
+                  <span
+                    data-testid={`partner-deposit-amount-${restroom.id}`}
+                    className="text-purple-700 dark:text-purple-400"
+                  >
+                    {typeof restroom.deposit_amount_krw === "number" &&
+                    restroom.deposit_amount_krw > 0
+                      ? `${restroom.deposit_amount_krw.toLocaleString()}원`
+                      : "금액 확인 필요"}
+                  </span>
                 </span>
-                <span
-                  data-testid={`partner-deposit-amount-${restroom.id}`}
-                  className="shrink-0 font-bold text-purple-900 dark:text-purple-200"
-                >
-                  {typeof restroom.deposit_amount_krw === "number" &&
-                  restroom.deposit_amount_krw > 0
-                    ? `${restroom.deposit_amount_krw.toLocaleString()}원`
-                    : "금액 확인 필요"}
+                <span className="shrink-0 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                  테스트 · 실제 청구 없음
                 </span>
               </div>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                상세 페이지에서 테스트 보증금 결제 후 이용 가능하며, 영수증 심사 승인 시 환급됩니다.
+              <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+                결제 후 이용할 수 있어요. 매장에서 구매한 영수증이 승인되면 보증금을 돌려받을 수 있어요.
               </p>
             </div>
           ) : restroom.access_mode === "real_deposit" ? (

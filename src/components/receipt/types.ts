@@ -50,6 +50,9 @@ export interface EligibleAccessSessionItem {
   isWindowExpired: boolean;
   hasPendingReceipt: boolean;
   hasApprovedReceipt: boolean;
+  hasRejectedReceipt?: boolean;
+  isRefunded?: boolean;
+  latestSubmissionStatus?: ReceiptSubmissionStatus | null;
 }
 
 export interface CustomerReceiptsData {

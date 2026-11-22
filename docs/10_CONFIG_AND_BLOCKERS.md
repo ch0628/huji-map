@@ -32,6 +32,11 @@ Do not use a Toss live key. A fresh 32-byte random AES key for PIN can be genera
 - Toss key missing: checkout disabled and `결제 기능 준비 중`; never issue a real access session via fake confirmation.
 - Supabase credentials missing: local schema migrations and mock-only unit tests possible; remote auth/database tests BLOCKED.
 - No merchant PIN approval: test with synthetic TEST PIN in isolated test fixture only, never reveal production PIN.
+- Behavioral analytics (`NEXT_PUBLIC_ANALYTICS_ENABLED`):
+  - Local `.env.example` and `Dockerfile` keep safe default `false`.
+  - Next.js inlines `NEXT_PUBLIC_ANALYTICS_ENABLED` at **build time** (`Dockerfile` `--build-arg`, `cloudbuild.yaml`). Server APIs (`/api/v1/events`, `/api/v1/sessions`) also gate on runtime env (`403 ANALYTICS_DISABLED` when not `"true"`).
+  - `cloudbuild.yaml` sets `_NEXT_PUBLIC_ANALYTICS_ENABLED: "true"` for staging after first-visit `/` & public-route full-screen tri-state consent UI (`휴지맵 시작하기`, 4 plain-Korean accordions + expandable privacy details, `undecided` default, SSR flash prevention via `hm_consent_pref`), `이용 통계 설정` modal withdrawal, standalone `/privacy` & `/settings/privacy` redirect removal, and guest/authenticated analytics separation passed verification; actual staging activation takes effect only after Git push + Cloud Build deployment completes. Live/production payment remains `disabled` / non-live.
+  - Legal review remains pending for formal retention periods and statutory privacy disclosures before general user live operation.
 
 ## Useful official docs
 

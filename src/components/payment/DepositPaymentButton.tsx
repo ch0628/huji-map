@@ -78,6 +78,7 @@ export default function DepositPaymentButton({
   const handleClick = () => {
     trackPaymentButtonClicked({
       restroom,
+      policyId: restroom.active_policy?.id ?? null,
       depositAmountKrw: resolvedAmount,
     });
     setIsModalOpen(true);
@@ -89,7 +90,7 @@ export default function DepositPaymentButton({
         type="button"
         onClick={handleClick}
         data-testid="detail-partner-payment-btn"
-        className="flex min-h-[48px] w-full flex-1 items-center justify-center gap-2 rounded-xl bg-purple-600 px-4 py-3 text-sm font-bold text-white shadow-md hover:bg-purple-700 active:scale-[0.99] transition"
+        className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl bg-purple-600 px-4 py-3 text-sm font-bold text-white shadow-md hover:bg-purple-700 active:scale-[0.99] transition"
       >
         <span>💳</span>
         <span>안심 제휴 보증금 결제 ({resolvedAmount.toLocaleString()}원)</span>

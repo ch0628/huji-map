@@ -41,16 +41,9 @@ const ADMIN_TOOLS = [
     testId: "admin-card-refunds",
   },
   {
-    href: "/admin/leads",
-    title: "가게 리드 50곳 관리",
-    description: "H1 실험 모수 가게 목록 및 접촉 시도 이력 관리",
-    icon: "📋",
-    testId: "admin-card-leads",
-  },
-  {
     href: "/admin/analytics/pmf",
-    title: "PMF 가설 검증 대시보드",
-    description: "H1/H2/H5 핵심 실험 지표 및 행동 이벤트 집계 확인",
+    title: "서비스 이용 분석",
+    description: "방문 브라우저, 지도·상세·길찾기, 결제·영수증·환급 이용 현황 확인",
     icon: "📊",
     testId: "admin-card-pmf",
   },

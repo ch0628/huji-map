@@ -90,6 +90,7 @@ export default async function MyReceiptsPage(props: PageProps) {
     try {
       initialData = await listCustomerReceiptsAndEligibleSessions({
         userId: session.user.id,
+        accessSessionId,
       });
     } catch {
       initialData = null;

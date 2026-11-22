@@ -596,6 +596,24 @@ describe("TASK 17: Events Backend Specification & Validation", () => {
     });
 
     it("trackEvent dispatches POST to /api/v1/events and returns result", async () => {
+      const prevEnv = process.env.NEXT_PUBLIC_ANALYTICS_ENABLED;
+      process.env.NEXT_PUBLIC_ANALYTICS_ENABLED = "true";
+      const mockStorage: Record<string, string> = {
+        hm_consent_state: JSON.stringify({ analytics: true }),
+      };
+      vi.stubGlobal("window", {
+        localStorage: {
+          getItem: (key: string) => mockStorage[key] ?? null,
+          setItem: (key: string, val: string) => {
+            mockStorage[key] = val;
+          },
+          removeItem: (key: string) => {
+            delete mockStorage[key];
+          },
+        },
+        dispatchEvent: vi.fn(),
+      });
+
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
@@ -612,7 +630,8 @@ describe("TASK 17: Events Backend Specification & Validation", () => {
 
       const res = await trackEvent({
         clientEventId: "11111111-1111-4111-8111-111111111111",
-        eventName: "landing_view",
+        eventName: "map_loaded",
+        properties: { zoom: 3, restroom_count: 5, filter: "all" },
       });
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -621,6 +640,11 @@ describe("TASK 17: Events Backend Specification & Validation", () => {
       expect(opts.method).toBe("POST");
       expect(res.clientEventId).toBe("11111111-1111-4111-8111-111111111111");
 
+      if (prevEnv === undefined) {
+        delete process.env.NEXT_PUBLIC_ANALYTICS_ENABLED;
+      } else {
+        process.env.NEXT_PUBLIC_ANALYTICS_ENABLED = prevEnv;
+      }
       vi.unstubAllGlobals();
     });
   });

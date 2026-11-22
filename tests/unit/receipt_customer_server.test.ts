@@ -140,7 +140,12 @@ describe("receipt-server: listCustomerReceiptsAndEligibleSessions", () => {
                 return orderQuery;
               }
               if (table === "payment_refunds") {
-                return { data: mockRefundRows, error: null };
+                const refundQuery: any = {
+                  data: col === "payment_order_id" ? [] : mockRefundRows,
+                  error: null,
+                };
+                refundQuery.in = vi.fn(() => refundQuery);
+                return refundQuery;
               }
               if (table === "restroom_access_policies") {
                 return { data: mockPolicyRows, error: null };
@@ -283,7 +288,12 @@ describe("receipt-server: listCustomerReceiptsAndEligibleSessions", () => {
                 return orderQuery;
               }
               if (table === "payment_refunds") {
-                return { data: [], error: null };
+                const refundQuery: any = {
+                  data: [],
+                  error: null,
+                };
+                refundQuery.in = vi.fn(() => refundQuery);
+                return refundQuery;
               }
               if (table === "restroom_access_policies") {
                 return { data: mockPolicyRows, error: null };

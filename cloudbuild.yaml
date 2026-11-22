@@ -19,7 +19,7 @@ substitutions:
   _NEXT_PUBLIC_SUPABASE_ANON_KEY: ""
   _NEXT_PUBLIC_KAKAO_MAP_JS_KEY: ""
   _NEXT_PUBLIC_TOSS_TEST_CLIENT_KEY: ""
-  _NEXT_PUBLIC_ANALYTICS_ENABLED: "false"
+  _NEXT_PUBLIC_ANALYTICS_ENABLED: "true"
   _SECRET_SUPABASE_SECRET_KEY: "hujimap-supabase-secret-key"
   _SECRET_TOSS_TEST_SECRET_KEY: "hujimap-toss-test-secret-key"
   _SECRET_PIN_ENCRYPTION_KEY_BASE64: "hujimap-pin-encryption-key"

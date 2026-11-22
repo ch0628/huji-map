@@ -6,6 +6,8 @@ import { useSearchParams, useRouter } from "next/navigation";
 import type { PublicPaymentOrder } from "@/lib/payments/types";
 import type { PublicAccessSession } from "@/lib/access/types";
 import type { PaymentConfirmState, PaymentErrorDetails } from "@/components/payment/types";
+import PinRevealPanel from "@/components/access/PinRevealPanel";
+import type { AccessRestroomSummary } from "@/components/access/types";
 
 export interface PaymentSuccessClientProps {
   readonly initialUser?: { id: string; email?: string | null } | null;
@@ -36,6 +38,7 @@ export default function PaymentSuccessClient({
   const [errorDetails, setErrorDetails] = useState<PaymentErrorDetails | null>(null);
   const [approvedOrder, setApprovedOrder] = useState<PublicPaymentOrder | null>(null);
   const [accessSession, setAccessSession] = useState<PublicAccessSession | null>(null);
+  const [restroomSummary, setRestroomSummary] = useState<AccessRestroomSummary | null>(null);
   const [isCheckingStatus, setIsCheckingStatus] = useState<boolean>(false);
 
   // Prevent double invocation in React StrictMode
@@ -268,6 +271,40 @@ export default function PaymentSuccessClient({
     executeConfirm();
   }, [executeConfirm]);
 
+  useEffect(() => {
+    const restroomId = accessSession?.restroom_id;
+    if (confirmState !== "confirmed" || !restroomId) return;
+
+    let cancelled = false;
+    fetch(`/api/v1/restrooms/${encodeURIComponent(restroomId)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((payload) => {
+        if (cancelled || !payload?.ok || !payload?.data) return;
+        const d = payload.data;
+        setRestroomSummary({
+          id: d.id,
+          name: d.name || "제휴 화장실",
+          road_address: d.road_address || "",
+          address_detail: d.address_detail ?? null,
+          floor: d.floor ?? null,
+          entrance_instructions: d.entrance_instructions ?? null,
+          access_method: d.access_method || accessSession.access_method_snapshot,
+          publication_status: "published",
+          business_id: d.business_id ?? null,
+          business_name: d.business?.name ?? null,
+          business_category: d.business?.category ?? null,
+          business_phone: d.business?.phone ?? null,
+        });
+      })
+      .catch(() => {
+        // Non-blocking: PinRevealPanel still works with fallback restroom name
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [confirmState, accessSession?.restroom_id, accessSession?.access_method_snapshot]);
+
   return (
     <div
       data-testid="payment-success-client"
@@ -293,92 +330,114 @@ export default function PaymentSuccessClient({
       {confirmState === "confirmed" && approvedOrder && accessSession && (
         <div
           data-testid="payment-confirmed-view"
-          className="flex flex-col gap-4 rounded-2xl border border-emerald-200 bg-white p-6 shadow-sm dark:border-emerald-900/60 dark:bg-slate-900"
+          className="flex flex-col gap-4 rounded-2xl border border-emerald-200 bg-white p-5 shadow-sm dark:border-emerald-900/60 dark:bg-slate-900"
         >
           {/* 성공 헤더 */}
-          <div className="text-center pb-3 border-b border-slate-100 dark:border-slate-800">
-            <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-2xl dark:bg-emerald-950/80">
-              🎉
+          <div className="border-b border-slate-100 pb-3 text-center dark:border-slate-800">
+            <div className="mx-auto mb-2 flex h-11 w-11 items-center justify-center rounded-full bg-emerald-100 text-xl dark:bg-emerald-950/80">
+              ✓
             </div>
             <h1 className="text-lg font-bold text-slate-900 dark:text-white">
-              보증금 결제 승인 완료
+              결제가 완료됐어요
             </h1>
-            <p className="mt-1 text-xs text-emerald-600 dark:text-emerald-400 font-semibold">
-              화장실 이용권이 성공적으로 활성화되었습니다.
+            <p
+              data-testid="confirmed-restroom-name"
+              className="mt-1 text-sm font-semibold text-slate-800 dark:text-slate-100"
+            >
+              {restroomSummary?.name || "제휴 화장실"}
             </p>
-          </div>
-
-          {/* 테스트 모드 고지 */}
-          <div className="rounded-xl bg-amber-50 p-3 text-xs text-amber-900 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-900/50">
-            <span className="font-bold">⚠️ 테스트 결제 안내:</span> 실제 신용카드 대금은 청구되지 않으며 테스트 승인 완료되었습니다.
-          </div>
-
-          {/* 결제 및 이용권 정보 */}
-          <div className="rounded-xl bg-slate-50 p-4 dark:bg-slate-800/60 space-y-2.5 text-xs">
-            <div className="flex justify-between items-center text-slate-600 dark:text-slate-400">
-              <span>주문 번호</span>
-              <span className="font-mono text-[11px] text-slate-800 dark:text-slate-200" data-testid="confirmed-order-id">
-                {approvedOrder.order_id}
-              </span>
-            </div>
-
-            <div className="flex justify-between items-center text-slate-600 dark:text-slate-400">
-              <span>결제 금액</span>
-              <span className="font-bold text-slate-900 dark:text-slate-100" data-testid="confirmed-amount">
-                {approvedOrder.amount_krw.toLocaleString()}원 (테스트)
-              </span>
-            </div>
-
-            <div className="flex justify-between items-center text-slate-600 dark:text-slate-400">
-              <span>이용권 상태</span>
+            <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5">
               <span
                 data-testid="confirmed-session-status"
                 className="inline-flex items-center rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300"
               >
-                ✓ {accessSession.status === "authorized" ? "이용권 활성화 (authorized)" : accessSession.status}
+                이용권 활성화
               </span>
-            </div>
-
-            <div className="flex justify-between items-center text-slate-600 dark:text-slate-400">
-              <span>이용권 만료 일시</span>
-              <span className="text-[11px] font-medium text-slate-800 dark:text-slate-200">
-                {new Date(accessSession.expires_at).toLocaleString("ko-KR")}
+              <span className="inline-flex items-center rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-900 dark:bg-amber-950/50 dark:text-amber-200">
+                테스트 결제 · 실제 청구 없음
               </span>
             </div>
           </div>
 
-          {/* 도어락 PIN 안내 (TASK 23~25 연계) */}
-          <div className="rounded-xl border border-purple-200 bg-purple-50 p-3.5 text-xs text-purple-900 dark:border-purple-900/50 dark:bg-purple-950/40 dark:text-purple-200">
-            <p className="font-bold mb-1">🔐 도어락 비밀번호 안내</p>
-            <p className="leading-relaxed text-[11px] text-purple-800 dark:text-purple-300">
-              도어락 비밀번호 복호화 및 열람 기능은 후속 단계(TASK 23~25)에서 제공됩니다.
-              현재 비밀번호는 서버에 암호화되어 안전하게 보호되고 있습니다.
-            </p>
-          </div>
+          {/* 최우선: 도어락 비밀번호 확인 (또는 비PIN 안내) — 사용자 클릭 시에만 서버에서 조회 */}
+          <PinRevealPanel
+            session={accessSession}
+            restroom={
+              restroomSummary ?? {
+                id: accessSession.restroom_id,
+                name: "제휴 화장실",
+                road_address: "",
+                address_detail: null,
+                floor: null,
+                entrance_instructions: null,
+                access_method: accessSession.access_method_snapshot,
+                publication_status: "published",
+                business_id: null,
+                business_name: null,
+                business_category: null,
+                business_phone: null,
+              }
+            }
+            order={approvedOrder}
+            refund={null}
+            compact={true}
+          />
 
-          {/* 보증금 환급 심사 안내 */}
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 text-xs text-slate-800 dark:border-slate-800 dark:bg-slate-800/40 dark:text-slate-200">
-            <p className="font-bold mb-1">🧾 보증금 환급 심사 안내</p>
-            <p className="leading-relaxed text-[11px] text-slate-600 dark:text-slate-300">
-              제휴 매장 실제 이용(구매) 영수증 사진을 제출하시면 관리자 수동 검수를 거쳐 승인 완료 시 보증금이 전액 환급(테스트 결제 취소)됩니다. (OCR 자동 승인 없음, 심사 반려 시 미환급)
-            </p>
-          </div>
-
-          {/* 액션 버튼 */}
-          <div className="mt-2 flex flex-col gap-2 pt-2">
+          {/* 보조 액션 버튼 */}
+          <div className="flex flex-col gap-2">
             <Link
               href={`/restrooms/${accessSession.restroom_id}`}
-              className="flex min-h-[48px] w-full items-center justify-center rounded-xl bg-purple-600 px-4 py-3 text-sm font-bold text-white shadow-md hover:bg-purple-700 active:scale-[0.99] transition text-center"
+              className="flex min-h-[44px] w-full items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-center text-xs font-semibold text-slate-800 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
             >
-              화장실 상세 정보로 이동
+              화장실 상세 보기
             </Link>
             <Link
               href="/map"
-              className="flex min-h-[44px] w-full items-center justify-center rounded-xl bg-slate-100 px-4 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 text-center"
+              className="flex min-h-[44px] w-full items-center justify-center rounded-xl bg-slate-100 px-4 py-2.5 text-center text-xs font-semibold text-slate-700 hover:bg-slate-200 dark:bg-slate-800/70 dark:text-slate-300"
             >
               지도로 돌아가기
             </Link>
           </div>
+
+          {/* 축소된 결제·환급 상세 (펼쳐보기) */}
+          <details
+            data-testid="confirmed-payment-details"
+            className="rounded-xl bg-slate-50 p-3 text-xs dark:bg-slate-800/60"
+          >
+            <summary className="flex min-h-[28px] cursor-pointer list-none items-center justify-between font-semibold text-slate-700 dark:text-slate-200">
+              <span>결제·환급 상세 보기</span>
+              <span className="text-[11px] text-slate-500">▾</span>
+            </summary>
+            <div className="mt-2.5 space-y-2 border-t border-slate-200/80 pt-2.5 dark:border-slate-700">
+              <div className="flex items-center justify-between gap-2 text-slate-600 dark:text-slate-400">
+                <span>결제 금액</span>
+                <span
+                  className="font-bold text-slate-900 dark:text-slate-100"
+                  data-testid="confirmed-amount"
+                >
+                  {approvedOrder.amount_krw.toLocaleString()}원 (테스트)
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2 text-slate-600 dark:text-slate-400">
+                <span>주문 번호</span>
+                <span
+                  className="font-mono text-[11px] text-slate-800 dark:text-slate-200 break-all"
+                  data-testid="confirmed-order-id"
+                >
+                  {approvedOrder.order_id}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2 text-slate-600 dark:text-slate-400">
+                <span>이용권 만료</span>
+                <span className="text-[11px] font-medium text-slate-800 dark:text-slate-200">
+                  {new Date(accessSession.expires_at).toLocaleString("ko-KR")}
+                </span>
+              </div>
+              <p className="pt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                매장에서 구매한 영수증을 제출해 승인되면 보증금이 전액 환급됩니다.
+              </p>
+            </div>
+          </details>
         </div>
       )}
 

@@ -836,4 +836,62 @@ export async function decideReceiptReview(
   };
 }
 
+/**
+ * Verifies customer ownership of a receipt submission and returns a short-lived signed read URL.
+ * Spec: UI-11, docs/08_SECURITY_OPERATIONS.md
+ * Invariant: Private bucket only; customer can view ONLY their own submitted receipt.
+ */
+export async function getCustomerReceiptImageSignedUrl(params: {
+  receiptId: string;
+  userId: string;
+  expiresInSeconds?: number;
+}): Promise<{ signedUrl: string; expiresIn: number }> {
+  const { receiptId, userId, expiresInSeconds = 300 } = params;
 
+  if (!isServiceRoleConfigured()) {
+    throw new ReceiptServiceError(
+      "CONFIG_REQUIRED",
+      "서버 스토리지 보안 서비스 설정이 필요합니다.",
+      503
+    );
+  }
+
+  const adminClient = createAdminClient();
+  const { data: row, error } = await (adminClient as any)
+    .from("receipt_submissions")
+    .select("id, user_id, storage_path")
+    .eq("id", receiptId)
+    .maybeSingle();
+
+  if (error) {
+    throw new ReceiptServiceError(
+      "DATABASE_ERROR",
+      "영수증 정보를 확인하지 못했습니다.",
+      500
+    );
+  }
+
+  if (!row) {
+    throw new ReceiptServiceError("NOT_FOUND", "영수증을 찾을 수 없습니다.", 404);
+  }
+
+  if (row.user_id !== userId) {
+    throw new ReceiptServiceError(
+      "FORBIDDEN",
+      "본인이 제출한 영수증 이미지만 조회할 수 있습니다.",
+      403
+    );
+  }
+
+  const signedUrl = await createReceiptSignedReadUrl({
+    storagePath: row.storage_path,
+    userId,
+    isAdmin: false,
+    expiresInSeconds,
+  });
+
+  return {
+    signedUrl,
+    expiresIn: expiresInSeconds,
+  };
+}

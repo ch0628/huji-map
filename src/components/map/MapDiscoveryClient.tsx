@@ -23,6 +23,11 @@ import {
   haversineMeters,
 } from "@/lib/maps/geo";
 import { useVisitorSession, useEventTracker } from "@/lib/events/hooks";
+import {
+  ANALYTICS_CONSENT_CHANGED_EVENT,
+  ANALYTICS_SESSION_RESET_EVENT,
+  isAnalyticsAllowed,
+} from "@/lib/events/client";
 
 export interface MapDiscoveryClientProps {
   readonly initialRestroomId?: string;
@@ -132,24 +137,56 @@ export default function MapDiscoveryClient({
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const mapProviderRef = useRef<MapProvider | null>(null);
+  const isMapReadyRef = useRef<boolean>(false);
+  const latestMapMetaRef = useRef<{
+    zoom: number;
+    restroomCount: number;
+    filter: RestroomFilterType;
+  }>({
+    zoom: DEFAULT_ZOOM_LEVEL,
+    restroomCount: 0,
+    filter: initialFilterType,
+  });
+  const selectionSourceRef = useRef<
+    "marker_selection" | "list_drawer" | "direct_query"
+  >("marker_selection");
 
-  // 방문자 세션 초기화 및 이벤트 추적기 연동
+  // 방문자 세션 초기화 및 이벤트 추적기 연동 (선택적 분석 6종 전용)
   useVisitorSession();
   const {
-    trackLandingView,
     trackMapLoaded,
     trackMarkerClicked,
     trackCardViewed,
-    trackDetailOpened,
     trackDirectionsClicked,
-    trackPaymentButtonClicked,
-    trackPaymentUnavailableShown,
   } = useEventTracker();
 
-  // 최초 마운트 시 landing_view 이벤트 기록
   useEffect(() => {
-    trackLandingView();
-  }, [trackLandingView]);
+    latestMapMetaRef.current = {
+      zoom: zoomLevel,
+      restroomCount: rawRestrooms.length,
+      filter: filterType,
+    };
+  }, [zoomLevel, rawRestrooms.length, filterType]);
+
+  // 동의 직후(또는 로그인/로그아웃 세션 전환 후) 이미 열린 지도에서 map_loaded가 누락되지 않도록 보완
+  useEffect(() => {
+    const handleAnalyticsSync = () => {
+      if (isAnalyticsAllowed() && isMapReadyRef.current) {
+        trackMapLoaded({
+          zoom: latestMapMetaRef.current.zoom,
+          restroomCount: latestMapMetaRef.current.restroomCount,
+          filter: latestMapMetaRef.current.filter,
+          centerRegion: "수원시",
+        });
+      }
+    };
+    window.addEventListener(ANALYTICS_CONSENT_CHANGED_EVENT, handleAnalyticsSync);
+    window.addEventListener(ANALYTICS_SESSION_RESET_EVENT, handleAnalyticsSync);
+    return () => {
+      window.removeEventListener(ANALYTICS_CONSENT_CHANGED_EVENT, handleAnalyticsSync);
+      window.removeEventListener(ANALYTICS_SESSION_RESET_EVENT, handleAnalyticsSync);
+    };
+  }, [trackMapLoaded]);
 
   // 중심 좌표 기반 주변 화장실 단일 API 요청 (거리순 최대 100건)
   const fetchRestrooms = useCallback(
@@ -409,6 +446,7 @@ export default function MapDiscoveryClient({
       setRawRestrooms((prev) =>
         prev.some((r) => r.id === restroom.id) ? prev : [restroom, ...prev]
       );
+      selectionSourceRef.current = "direct_query";
       setSelectedRestroomId(restroom.id);
       setIsSheetExpanded(false);
       setShowSearchHere(false);
@@ -491,12 +529,12 @@ export default function MapDiscoveryClient({
     );
   }, [rawRestrooms, selectedRestroomId, pinnedSearchRestroom]);
 
-  // 화장실 카드가 바텀시트에 노출될 때 restroom_card_viewed 기록
+  // 화장실 카드가 바텀시트에 실제 노출될 때 restroom_card_viewed 기록
   useEffect(() => {
     if (selectedRestroom) {
       trackCardViewed({
         restroom: selectedRestroom,
-        source: "marker_selection",
+        source: selectionSourceRef.current,
       });
     }
   }, [selectedRestroom, trackCardViewed]);
@@ -517,6 +555,7 @@ export default function MapDiscoveryClient({
             restroom: r,
             markerIndex: index,
           });
+          selectionSourceRef.current = "marker_selection";
           setSelectedRestroomId(id);
           setIsSheetExpanded(false);
           // 선택된 화장실로 지도 부드럽게 이동
@@ -704,6 +743,7 @@ export default function MapDiscoveryClient({
           onZoomChanged={handleZoomChanged}
           onMapReady={(provider) => {
             mapProviderRef.current = provider;
+            isMapReadyRef.current = true;
             lastMoveRef.current = {
               point: currentMapCenterRef.current,
               at: Date.now(),
@@ -760,31 +800,16 @@ export default function MapDiscoveryClient({
         selectedRestroom={selectedRestroom}
         restrooms={filteredRestrooms}
         onSelectRestroom={(restroom) => {
+          selectionSourceRef.current = "list_drawer";
           setSelectedRestroomId(restroom.id);
           setIsSheetExpanded(false);
           moveTo({ lat: restroom.latitude, lng: restroom.longitude });
-          trackCardViewed({
-            restroom,
-            source: "list_drawer",
-          });
         }}
         onCloseSelected={() => {
           setSelectedRestroomId(null);
           setPinnedSearchRestroom(null);
         }}
         onDirectionsClick={(restroom) => setDirectionsTarget(restroom)}
-        onPaymentClick={(restroom) => {
-          trackPaymentButtonClicked({
-            restroom,
-            depositAmountKrw: restroom.deposit_amount_krw ?? undefined,
-          });
-        }}
-        onDetailClick={(restroom) => {
-          trackDetailOpened({
-            restroom,
-            sourceComponent: "card_detail_link",
-          });
-        }}
         isExpanded={isSheetExpanded}
         onToggleExpand={() => setIsSheetExpanded((prev) => !prev)}
         isLoading={isLoading}

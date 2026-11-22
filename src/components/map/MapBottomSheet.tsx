@@ -36,28 +36,38 @@ export default function MapBottomSheet({
   distancesById,
   sortBasisLabel,
 }: MapBottomSheetProps) {
-  // 1. 단일 화장실이 선택된 경우 -> 상세 정보 카드 모드
+  // 1. 단일 화장실이 선택된 경우 -> 외부 흰색 컨테이너 없이 하늘색 정보 카드 1개만 표시
   if (selectedRestroom) {
     return (
       <div
         data-testid="map-bottom-sheet-selected"
-        className="absolute bottom-3 left-3 right-3 z-30 max-h-[60vh] overflow-y-auto animate-in slide-in-from-bottom duration-200"
+        className="absolute bottom-3 left-3 right-3 z-30 flex max-h-[62vh] flex-col rounded-2xl shadow-xl animate-in slide-in-from-bottom duration-200"
       >
-        <div className="relative">
-          {/* 닫기 버튼 */}
-          <button
-            type="button"
-            onClick={onCloseSelected}
-            data-testid="bottom-sheet-close-btn"
-            className="absolute -top-3 -right-2 z-40 flex h-7 w-7 items-center justify-center rounded-full bg-slate-800 text-xs font-bold text-white shadow-md hover:bg-slate-750 dark:bg-slate-700"
-            aria-label="선택 해제 및 닫기"
+        <button
+          type="button"
+          onClick={onCloseSelected}
+          data-testid="bottom-sheet-close-btn"
+          className="absolute right-1.5 top-1.5 z-20 flex h-10 w-10 items-center justify-center rounded-lg text-slate-900 hover:bg-slate-900/5 active:scale-95 dark:text-slate-100 dark:hover:bg-white/10"
+          aria-label="선택 해제 및 닫기"
+        >
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 16 16"
+            className="h-3.5 w-3.5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
           >
-            ✕
-          </button>
+            <path d="M3.5 3.5L12.5 12.5M12.5 3.5L3.5 12.5" />
+          </svg>
+        </button>
 
+        <div className="flex-1 overflow-y-auto rounded-2xl">
           <PublicRestroomCard
             restroom={selectedRestroom}
             isSelected={true}
+            reserveTopRightClose={true}
             distanceMeters={distancesById?.[selectedRestroom.id]}
             onDirectionsClick={onDirectionsClick}
             onPaymentClick={onPaymentClick}

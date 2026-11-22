@@ -49,6 +49,7 @@ export default function MapCanvas({
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const providerRef = useRef<MapProvider | null>(null);
+  const isMountedRef = useRef<boolean>(false);
   const [status, setStatus] = useState<MapSdkStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -96,6 +97,11 @@ export default function MapCanvas({
 
       await provider.init(containerRef.current, options);
 
+      if (!isMountedRef.current) {
+        provider.destroy();
+        return;
+      }
+
       if (markers.length > 0) {
         provider.setMarkers(markers);
       }
@@ -104,6 +110,7 @@ export default function MapCanvas({
       updateStatus("ready");
       onMapReady?.(provider);
     } catch (err) {
+      if (!isMountedRef.current) return;
       const message =
         err instanceof Error
           ? err.message
@@ -126,7 +133,7 @@ export default function MapCanvas({
   ]);
 
   useEffect(() => {
-    let isMounted = true;
+    isMountedRef.current = true;
 
     // Next.js 클라이언트 사이드 마운트 후 초기화
     if (typeof window !== "undefined") {
@@ -134,7 +141,7 @@ export default function MapCanvas({
     }
 
     return () => {
-      isMounted = false;
+      isMountedRef.current = false;
       if (providerRef.current) {
         providerRef.current.destroy();
         providerRef.current = null;

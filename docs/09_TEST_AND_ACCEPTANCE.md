@@ -8,8 +8,8 @@ Every `tasks/NN...` must record: list of files changed, `npm run lint`, `npm run
 
 | ID | Scenario | Expected |
 |---|---|---|
-| A01 | guest map public restroom click/directions | no account, no payment, route link, event logged |
-| A02 | guest approved partner detail & directions | view policy/deposit, route link event, but PIN absent |
+| A01 | guest map public restroom click/directions | no account, no payment, route link; behavioral event logged only if `NEXT_PUBLIC_ANALYTICS_ENABLED=true` and guest accepted consent |
+| A02 | guest approved partner detail & directions | view policy/deposit, route link; behavioral event logged only with consent, PIN always absent |
 | A03 | unapproved merchant tries publish | forbidden; admin required |
 | A04 | partner merchant sees other's business | forbidden |
 | A05 | admin approval | draft -> pending -> approved; public visible only when approved |
@@ -24,9 +24,9 @@ Every `tasks/NN...` must record: list of files changed, `npm run lint`, `npm run
 | A14 | admin TEST full cancellation success | provider confirmed, refund succeeded; duplicate request reuses result |
 | A15 | Toss cancel API error/time out | status recoverable/uncertain; don't claim success |
 | A16 | no store purchase/valid receipt | test payment stays; no additional charge |
-| A17 | repeated click/event UUID | event dedup, distinct browser counts |
-| A18 | H5 partner A exposure + B directions | no H5 conversion |
-| A19 | H2 organic vs ad & travel answer | only qualified browsers in denominator |
+| A17 | repeated click/event UUID | event dedup, distinct browser counts, tri-state consent (`undecided`/`accepted`/`declined`), guest vs authenticated session isolation (no pre-login stitching), admin `전체`/`비로그인`/`로그인` filter, withdrawal enforcement |
+| A18 | H5 partner A exposure + B directions | no H5 conversion; sequence & same-restroom guard |
+| A19 | (Retired) A19 TravelSurveyBanner | **Intentionally retired**: A19 survey / `landing_view` removed and not restored; replaced by 6 opt-in events with tri-state default-`undecided` full-screen first-visit consent UI on `/` & public routes (`휴지맵 시작하기` + 4 plain-Korean accordions & expandable privacy details), user-menu `이용 통계 설정` modal, and `/privacy` (`/map?analyticsDetails=1`) & `/settings/privacy` (`/map?analyticsSettings=1`) redirects (standalone privacy pages retired) |
 | A20 | no secrets check | keys/PIN absent from client build, logs, version control |
 | A21 | mobile 360px, geolocation denied | restrooms can still be searched, buttons accessible |
 | A22 | no integration credentials | safe setup required UI; no invented successful payment/map |

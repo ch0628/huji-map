@@ -39,13 +39,13 @@ export default async function MerchantBusinessesPage() {
         <div
           role="alert"
           data-testid="merchant-unauthorized-401"
-          className="space-y-3 rounded-2xl border border-rose-300 bg-rose-50 p-5 text-xs text-rose-950 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200"
+          className="mx-auto my-auto w-full max-w-sm space-y-4 rounded-2xl border border-slate-200 bg-white p-6 text-center text-xs text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300"
         >
-          <h1 className="text-base font-bold">
-            로그인이 필요한 화면입니다 (401)
+          <h1 className="text-center text-base font-bold text-slate-900 dark:text-white">
+            로그인이 필요합니다
           </h1>
-          <p className="leading-relaxed">
-            가게 등록 및 관리 기능은 회원 로그인 후 이용하실 수 있습니다. 일반 회원(고객)도 자유롭게 가게를 등록하고 심사를 요청할 수 있습니다.
+          <p className="text-center leading-relaxed text-slate-600 dark:text-slate-400">
+            가게 등록과 관리는 로그인 후 이용할 수 있어요.
           </p>
           <div className="flex flex-col gap-2 pt-1">
             <Link

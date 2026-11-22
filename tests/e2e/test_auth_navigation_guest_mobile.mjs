@@ -61,8 +61,13 @@ async function run() {
       console.log(`✓ [${label}] 360px layout OK (${sw} <= ${iw})`);
     };
 
-    // 1. 비회원 / 접속 -> 메뉴 확인 -> /map -> /login 진입
+    // 1. 비회원 / 최초 접속 -> 동의 화면 확인 -> 동의 없이 시작하기 -> 홈 -> 메뉴 -> /map -> /login 진입
     await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+    await page.getByTestId("first-visit-consent-modal").waitFor();
+    await checkNoOverflow("home-first-visit-consent");
+    await page.getByTestId("consent-decline-btn").click();
+    await page.getByTestId("first-visit-consent-modal").waitFor({ state: "hidden" });
+
     await page.getByTestId("home-map-cta").waitFor();
     await page.getByTestId("home-login-link").waitFor();
     await page.getByTestId("home-signup-link").waitFor();

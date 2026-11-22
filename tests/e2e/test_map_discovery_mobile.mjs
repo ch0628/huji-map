@@ -133,8 +133,31 @@ async function runTests() {
       access_mode: "test_deposit",
     };
 
-    // Route interceptor for /api/v1/restrooms
-    await page.route("**/api/v1/restrooms*", async (route) => {
+    // Route interceptor for /api/v1/restrooms & /api/v1/restrooms/search
+    await page.route("**/api/v1/restrooms/search*", async (route) => {
+      const url = new URL(route.request().url());
+      const q = (url.searchParams.get("q") || "").trim();
+      const matched = [mockPublicItem, mockPartnerItem].filter(
+        (item) =>
+          item.name.includes(q) ||
+          (item.business_name && item.business_name.includes(q)) ||
+          item.road_address.includes(q)
+      );
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            items: matched,
+            total: matched.length,
+          },
+          requestId: "mock-search-id",
+        }),
+      });
+    });
+
+    await page.route("**/api/v1/restrooms?*", async (route) => {
       const url = new URL(route.request().url());
       const type = url.searchParams.get("type") || "all";
 
@@ -164,9 +187,14 @@ async function runTests() {
     // Mock geolocation permission denial
     await context.grantPermissions([]);
 
-    // 1. /map 진입 및 360px 반응형 레이아웃 검증
+    // 1. /map 진입 및 최초 동의 화면 통과 후 360px 반응형 레이아웃 검증
     console.log(">>> 3. Navigating to /map and verifying 360px mobile viewport...");
     await page.goto(`${BASE_URL}/map`, { waitUntil: "networkidle" });
+    const consentDecline = page.locator('[data-testid="consent-decline-btn"]');
+    if (await consentDecline.isVisible().catch(() => false)) {
+      await consentDecline.click();
+      await page.locator('[data-testid="first-visit-consent-modal"]').waitFor({ state: "hidden" });
+    }
 
     const scrollWidth = await page.evaluate(
       () => document.documentElement.scrollWidth
@@ -225,15 +253,19 @@ async function runTests() {
       throw new Error("Partner restroom card badge mismatch");
     }
 
-    // 제휴 화장실 결제 버튼 준비 중 및 비활성화 확인
-    const partnerPaymentBtn = partnerCard.locator(
-      `[data-testid="partner-payment-btn-${mockPartnerItem.id}"]`
+    // 제휴 화장실 카드 보증금 안내 및 상세/결제 이동 링크 확인
+    const partnerDepositAmount = partnerCard.locator(
+      `[data-testid="partner-deposit-amount-${mockPartnerItem.id}"]`
     );
-    await partnerPaymentBtn.waitFor({ state: "visible" });
-    const isPaymentDisabled = await partnerPaymentBtn.isDisabled();
-    console.log(`✓ Partner payment button disabled: ${isPaymentDisabled}`);
-    if (!isPaymentDisabled) {
-      throw new Error("Partner payment button should be disabled (in preparation)");
+    await partnerDepositAmount.waitFor({ state: "visible" });
+    const partnerDetailLink = partnerCard.locator(
+      `[data-testid="detail-link-${mockPartnerItem.id}"]`
+    );
+    await partnerDetailLink.waitFor({ state: "visible" });
+    const detailLinkText = await partnerDetailLink.innerText();
+    console.log(`✓ Partner detail link text: "${detailLinkText.trim()}"`);
+    if (!detailLinkText.includes("보증금 결제")) {
+      throw new Error(`Expected partner detail link to reference deposit payment, got: ${detailLinkText}`);
     }
 
     // 4. 길찾기 모달 및 3사 링크 검증
@@ -294,23 +326,26 @@ async function runTests() {
     await page.locator('[data-testid="filter-chip-all"]').click();
     await page.waitForTimeout(500);
 
-    // 6. 검색창 필터링 테스트
-    console.log(">>> 8. Testing search input filtering...");
+    // 6. 검색창 휴지맵 화장실 이름 검색 테스트
+    console.log(">>> 8. Testing search input place/restroom search...");
     const searchInput = page.locator('[data-testid="map-search-input"]');
     await searchInput.fill("행궁");
-    await page.waitForTimeout(300);
+    await page.waitForSelector('[data-testid="place-search-results"]', {
+      timeout: 5000,
+    });
 
-    const publicVisible = await page
-      .locator(`[data-testid="public-restroom-card-${mockPublicItem.id}"]`)
-      .count();
-    const partnerVisible = await page
-      .locator(`[data-testid="public-restroom-card-${mockPartnerItem.id}"]`)
+    const partnerSearchResult = page.locator(
+      `[data-testid="restroom-search-result-${mockPartnerItem.id}"]`
+    );
+    const partnerSearchVisible = await partnerSearchResult.count();
+    const publicSearchVisible = await page
+      .locator(`[data-testid="restroom-search-result-${mockPublicItem.id}"]`)
       .count();
 
     console.log(
-      `✓ Search '행궁' results -> Public: ${publicVisible}, Partner: ${partnerVisible}`
+      `✓ Search '행궁' dropdown results -> Public: ${publicSearchVisible}, Partner: ${partnerSearchVisible}`
     );
-    if (publicVisible !== 0 || partnerVisible !== 1) {
+    if (publicSearchVisible !== 0 || partnerSearchVisible !== 1) {
       throw new Error("Search keyword filtering failed");
     }
 

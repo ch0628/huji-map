@@ -181,11 +181,11 @@ describe("TASK 25 — Customer Access Ticket & Doorlock PIN UI Verification", ()
     expect(screen.queryByTestId("revealed-pin-value")).toBeNull();
     expect(document.body.textContent).not.toContain("2580*");
 
-    // 테스트 결제 워터마크 및 결제 자격 상태 표시 확인
-    expect(screen.getByTestId("detail-test-mode-watermark")).toBeDefined();
-    expect(screen.getByTestId("detail-payment-qualification").textContent).toContain(
-      "테스트 결제 승인 (1,000원)"
+    // 테스트 결제 안내 및 유효기한 표시 확인 (UI-12: 시스템/주문번호 문구 제거)
+    expect(screen.getByTestId("detail-test-mode-watermark").textContent).toContain(
+      "1,000원"
     );
+    expect(screen.queryByTestId("detail-order-id")).toBeNull();
 
     // 수동 버튼 클릭
     const revealBtn = screen.getByTestId("reveal-pin-btn");

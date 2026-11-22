@@ -61,6 +61,52 @@ async function runTests() {
 
   const page = await context.newPage();
 
+  await page.addInitScript(() => {
+    window.kakao = {
+      maps: {
+        load: (cb) => cb && cb(),
+        Map: function MockMap() {},
+        LatLng: function MockLatLng(lat, lng) {
+          this.lat = lat;
+          this.lng = lng;
+        },
+        LatLngBounds: function MockBounds() {},
+        Marker: function MockMarker() {},
+        MarkerImage: function MockMarkerImage() {},
+        Size: function MockSize() {},
+        Point: function MockPoint() {},
+        CustomOverlay: function MockOverlay() {},
+        event: { addListener: () => {}, removeListener: () => {} },
+        services: {
+          Status: { OK: "OK", ZERO_RESULT: "ZERO_RESULT", ERROR: "ERROR" },
+          Geocoder: function MockGeocoder() {
+            this.addressSearch = (_q, callback) => {
+              callback(
+                [
+                  {
+                    x: "127.0701",
+                    y: "37.5401",
+                    road_address: {
+                      address_name: "서울시 광진구 아차산로 200",
+                      building_name: "테스트빌딩",
+                    },
+                    address: {
+                      address_name: "자양동 123-45",
+                    },
+                  },
+                ],
+                "OK"
+              );
+            };
+          },
+          Places: function MockPlaces() {
+            this.keywordSearch = (_q, callback) => callback([], "ZERO_RESULT");
+          },
+        },
+      },
+    };
+  });
+
   // Helper: check horizontal scrollbar overflow
   async function checkNoHorizontalOverflow(stepName) {
     const overflow = await page.evaluate(() => {
@@ -83,7 +129,7 @@ async function runTests() {
     await checkNoHorizontalOverflow("Guest Businesses List 401");
 
     const auth401Text = await page.textContent('[data-testid="merchant-unauthorized-401"]');
-    if (!auth401Text?.includes("로그인이 필요한 화면입니다")) {
+    if (!auth401Text?.includes("로그인이 필요합니다")) {
       throw new Error("Missing 401 unauthorized title in guest view");
     }
     console.log("  ✓ Guest redirected to friendly 401 prompt with login link.");
@@ -307,19 +353,19 @@ async function runTests() {
     }
     console.log("  ✓ Test coordinate presets confirmed removed from the screen.");
 
-    // 4.2 Check coordinate guidance notice is present
-    const coordGuidance = await page.textContent("text=좌표 입력 안내");
-    if (!coordGuidance) {
-      throw new Error("Coordinate guidance text missing");
+    // 4.2 Check Kakao address search field is present (replacing manual coord entry)
+    const addressSearchField = await page.waitForSelector('[data-testid="address-search-field"]');
+    if (!addressSearchField) {
+      throw new Error("Address search field missing");
     }
-    console.log("  ✓ Coordinate guidance text confirmed visible.");
+    console.log("  ✓ Address search field confirmed visible.");
 
     // 4.3 Form validation on empty submit
     await page.click('[data-testid="business-form-submit-button"]');
     const formErrorAlert = await page.waitForSelector('[data-testid="business-form-error"]');
     const formErrorText = await formErrorAlert.textContent();
-    if (!formErrorText?.includes("입력한 정보에 오류가 있습니다")) {
-      throw new Error("Expected validation error on empty form submit");
+    if (!formErrorText?.includes("필수 입력 항목")) {
+      throw new Error(`Expected validation error on empty form submit, got: ${formErrorText}`);
     }
     console.log("  ✓ Form validation blocked empty submit.");
 
@@ -328,14 +374,14 @@ async function runTests() {
     // ------------------------------------------------------------------------
     console.log("\n>>> Step 5: Filling Business Info and Submitting Draft Creation...");
     await page.fill('input[name="name"]', "모바일 테스트 베이커리 건대점");
-    await page.selectOption("#biz-category-select", "카페");
+    await page.selectOption("#biz-category-select", "기타");
     await page.fill('input[name="category"]', "베이커리/디저트");
     await page.fill('textarea[name="description"]', "매일 아침 갓 구운 빵과 깨끗한 화장실을 제공합니다.");
-    await page.fill('input[name="road_address"]', "서울시 광진구 아차산로 200");
-    await page.fill('input[name="jibun_address"]', "자양동 123-45");
+    await page.fill('[data-testid="address-search-input"]', "서울시 광진구 아차산로 200");
+    await page.click('[data-testid="address-search-button"]');
+    await page.waitForSelector('[data-testid="address-search-result-0"]');
+    await page.click('[data-testid="address-search-result-0"]');
     await page.fill('input[name="address_detail"]', "1층");
-    await page.fill('input[name="latitude"]', "37.5401");
-    await page.fill('input[name="longitude"]', "127.0701");
     await page.fill('input[name="phone"]', "02-1234-5678");
     await page.fill('input[name="website_url"]', "https://instagram.com/test_bakery");
     await page.fill('input[name="registration_number"]', "123-45-67890");

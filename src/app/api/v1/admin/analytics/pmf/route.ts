@@ -123,6 +123,7 @@ export async function GET(request: Request) {
     startsAt: searchParams.get("startsAt") ?? undefined,
     endsAt: searchParams.get("endsAt") ?? undefined,
     includeTest: searchParams.get("includeTest") ?? undefined,
+    authFilter: searchParams.get("authFilter") ?? undefined,
   });
 
   if (!parseResult.success) {

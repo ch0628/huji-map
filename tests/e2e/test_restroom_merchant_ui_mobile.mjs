@@ -181,6 +181,22 @@ async function runTests() {
       });
     });
 
+    await page.route(`**/api/v1/merchant/businesses/${mockBusiness.id}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          business: {
+            ...mockBusiness,
+            address_detail: "1층 전체",
+            latitude: 37.2636,
+            longitude: 127.0286,
+          },
+        }),
+      });
+    });
+
     await page.route("**/api/v1/merchant/restrooms?*", async (route) => {
       await route.fulfill({
         status: 200,
@@ -292,11 +308,12 @@ async function runTests() {
     await page.waitForSelector('[data-testid="merchant-restroom-form"]');
     await checkNoHorizontalOverflow("Step 4 - New Restroom Form");
 
-    // Fill form
+    // Fill form (address/coords pre-filled automatically from approved business)
+    await page.waitForFunction(() => {
+      const addr = document.querySelector("#restroom-road-address");
+      return Boolean(addr && addr.value && addr.value.includes("수원시"));
+    });
     await page.fill("#restroom-name", "신규 등록 화장실");
-    await page.fill("#restroom-road-address", "경기도 수원시 팔달구 매산로 2");
-    await page.fill("#restroom-latitude", "37.2638");
-    await page.fill("#restroom-longitude", "127.0288");
     await page.fill("#restroom-floor", "2층");
 
     await page.click('[data-testid="restroom-form-submit-button"]');
@@ -314,9 +331,10 @@ async function runTests() {
     await page.waitForSelector('[data-testid="restroom-status-badge"]');
     await checkNoHorizontalOverflow("Step 5 - Restroom Detail");
 
-    // 1. Check Policy Manager
+    // 1. Check Policy Manager (collapsed by default in UI-15)
+    await page.click('[data-testid="toggle-manage-policy-btn"]');
     await page.waitForSelector('[data-testid="restroom-policy-manager"]');
-    console.log("  ✓ Policy manager visible.");
+    console.log("  ✓ Policy manager opened and visible.");
 
     // Change policy to free mode
     await page.click('input[name="change_policy_mode"][value="free_with_ad"]');
@@ -336,17 +354,17 @@ async function runTests() {
     console.log("\n>>> Step 6: Published Restroom Location Locking Check...");
     mockRestroom.publication_status = "published";
     await page.reload();
+    await page.click('[data-testid="toggle-manage-edit-btn"]');
     await page.waitForSelector('[data-testid="restroom-location-locked-alert"]');
     await checkNoHorizontalOverflow("Step 6 - Published Locked Alert");
 
     const isRoadAddrDisabled = await page.isDisabled("#restroom-road-address");
-    const isLatDisabled = await page.isDisabled("#restroom-latitude");
-    const isLngDisabled = await page.isDisabled("#restroom-longitude");
+    const searchInputWhenLocked = await page.$('[data-testid="address-search-input"]');
 
-    if (!isRoadAddrDisabled || !isLatDisabled || !isLngDisabled) {
-      throw new Error("Published restroom location fields must be disabled!");
+    if (!isRoadAddrDisabled || searchInputWhenLocked !== null) {
+      throw new Error("Published restroom location fields must be disabled and address search hidden!");
     }
-    console.log("  ✓ Published restroom location fields (road_address, lat, lng) are strictly locked & disabled.");
+    console.log("  ✓ Published restroom location fields (road_address) locked and address search hidden.");
 
     console.log("\n============================================================");
     console.log("✓ ALL TASK 13 MOBILE CHROME E2E TESTS PASSED (100%)");

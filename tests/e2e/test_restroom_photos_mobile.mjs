@@ -115,6 +115,8 @@ async function loginInContext(context, email, password) {
   const res = await resPromise;
   assert.equal(res.status(), 200, `Login API failed for ${email}: status ${res.status()}`);
   await page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 15000 });
+  await page.waitForLoadState("load");
+  await page.waitForTimeout(300);
   return page;
 }
 
@@ -234,6 +236,8 @@ async function run() {
     createdRestroomId = merchantPage.url().split("/").pop();
     assert.ok(createdRestroomId, "Created restroom ID missing");
 
+    await merchantPage.waitForSelector('[data-testid="toggle-manage-photos-btn"]');
+    await merchantPage.click('[data-testid="toggle-manage-photos-btn"]');
     await merchantPage.waitForSelector('[data-testid="restroom-photo-manager"]');
     await checkNoHorizontalOverflow(merchantPage, "merchant/restrooms/[id]");
 
@@ -331,7 +335,9 @@ async function run() {
 
     // 6. Post-approval A-plan replacement:
     // Merchant reloads and uploads replacement photo v2
-    await merchantPage.reload({ waitUntil: "networkidle" });
+    await merchantPage.reload({ waitUntil: "domcontentloaded" });
+    await merchantPage.waitForSelector('[data-testid="toggle-manage-photos-btn"]');
+    await merchantPage.click('[data-testid="toggle-manage-photos-btn"]');
     await merchantPage.waitForSelector(`[data-testid="replace-photo-btn-${photoV1Id}"]`);
     const [fcV2] = await Promise.all([
       merchantPage.waitForEvent("filechooser"),
@@ -356,14 +362,22 @@ async function run() {
     createdStoragePaths.push(photoV2.storage_path);
 
     // Public still sees v1 while v2 is pending
-    await guestPage.reload({ waitUntil: "networkidle" });
+    await guestPage.reload({ waitUntil: "domcontentloaded" });
     await guestPage.waitForSelector(`[data-testid="public-restroom-photo-${photoV1Id}"]`);
     const v2VisibleWhilePending = await guestPage.$(`[data-testid="public-restroom-photo-${photoV2.id}"]`);
     assert.equal(v2VisibleWhilePending, null, "Pending replacement photo must not be visible publicly");
 
     // Admin rejects v2 -> v1 remains live
-    await adminPage.goto(`${BASE_URL}/admin/restrooms`, { waitUntil: "networkidle" });
-    await adminPage.click('[data-testid="tab-pending_photos"]');
+    await adminPage.goto(`${BASE_URL}/admin/restrooms`, { waitUntil: "load" });
+    await adminPage.waitForSelector('[data-testid="tab-pending_photos"]');
+    await adminPage.waitForTimeout(500);
+    await Promise.all([
+      adminPage.waitForResponse(
+        (res) => res.url().includes("/api/v1/admin/restrooms") && res.url().includes("pending_photos") && res.status() === 200,
+        { timeout: 15000 }
+      ),
+      adminPage.click('[data-testid="tab-pending_photos"]'),
+    ]);
     await adminPage.waitForSelector(`[data-testid="inspect-restroom-btn-${createdRestroomId}"]`);
     await adminPage.click(`[data-testid="inspect-restroom-btn-${createdRestroomId}"]`);
     await adminPage.waitForSelector(`[data-testid="reject-photo-btn-${photoV2.id}"]`);
@@ -379,12 +393,14 @@ async function run() {
       .single();
     assert.equal(rejectedCheck?.moderation_status, "rejected", "Photo v2 must be rejected in DB");
 
-    await guestPage.reload({ waitUntil: "networkidle" });
+    await guestPage.reload({ waitUntil: "domcontentloaded" });
     await guestPage.waitForSelector(`[data-testid="public-restroom-photo-${photoV1Id}"]`);
     console.log("✓ Step 6a: Replacement reject preserves existing approved photo");
 
     // Merchant uploads v3 -> Admin approves replacement -> v3 replaces v1
-    await merchantPage.reload({ waitUntil: "networkidle" });
+    await merchantPage.reload({ waitUntil: "domcontentloaded" });
+    await merchantPage.waitForSelector('[data-testid="toggle-manage-photos-btn"]');
+    await merchantPage.click('[data-testid="toggle-manage-photos-btn"]');
     await merchantPage.waitForSelector(`[data-testid="replace-photo-btn-${photoV1Id}"]`);
     const [fcV3] = await Promise.all([
       merchantPage.waitForEvent("filechooser"),
@@ -406,15 +422,23 @@ async function run() {
     const photoV3 = afterRep3[0];
     createdStoragePaths.push(photoV3.storage_path);
 
-    await adminPage.reload({ waitUntil: "networkidle" });
-    await adminPage.click('[data-testid="tab-pending_photos"]');
+    await adminPage.reload({ waitUntil: "load" });
+    await adminPage.waitForSelector('[data-testid="tab-pending_photos"]');
+    await adminPage.waitForTimeout(500);
+    await Promise.all([
+      adminPage.waitForResponse(
+        (res) => res.url().includes("/api/v1/admin/restrooms") && res.url().includes("pending_photos") && res.status() === 200,
+        { timeout: 15000 }
+      ),
+      adminPage.click('[data-testid="tab-pending_photos"]'),
+    ]);
     await adminPage.waitForSelector(`[data-testid="inspect-restroom-btn-${createdRestroomId}"]`);
     await adminPage.click(`[data-testid="inspect-restroom-btn-${createdRestroomId}"]`);
     await adminPage.waitForSelector(`[data-testid="approve-photo-btn-${photoV3.id}"]`);
     await adminPage.click(`[data-testid="approve-photo-btn-${photoV3.id}"]`);
     await adminPage.waitForSelector('[data-testid="decision-success-alert"]', { timeout: 15000 });
 
-    await guestPage.reload({ waitUntil: "networkidle" });
+    await guestPage.reload({ waitUntil: "domcontentloaded" });
     await guestPage.waitForSelector(`[data-testid="public-restroom-photo-${photoV3.id}"] img`);
     const v1Gone = await guestPage.$(`[data-testid="public-restroom-photo-${photoV1Id}"]`);
     assert.equal(v1Gone, null, "Replaced old photo v1 must no longer be visible");

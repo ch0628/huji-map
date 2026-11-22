@@ -25,6 +25,7 @@ export const pmfQuerySchema = z.object({
       return false;
     }, z.boolean())
     .default(false),
+  authFilter: z.enum(["all", "guest", "authenticated"]).default("all"),
 });
 
 export type ValidatedPmfQueryParams = z.infer<typeof pmfQuerySchema>;

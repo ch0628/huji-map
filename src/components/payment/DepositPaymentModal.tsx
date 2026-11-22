@@ -5,8 +5,6 @@ import { useRouter } from "next/navigation";
 import type { PublicRestroomDetail } from "@/lib/restrooms/types";
 import { requestTossPayment } from "./toss-sdk";
 import type { PaymentCheckoutState } from "./types";
-import { useEventTracker } from "@/lib/events/hooks";
-import { trackEventSafe } from "@/lib/events/client";
 
 export interface DepositPaymentModalProps {
   readonly restroom: PublicRestroomDetail;
@@ -42,8 +40,6 @@ export default function DepositPaymentModal({
       : 0;
   const receiptWindowHours = restroom.active_policy?.receipt_window_hours ?? 24;
 
-  const { trackPaymentUnavailableShown } = useEventTracker();
-
   // Generate or reset idempotency key when modal opens
   useEffect(() => {
     if (isOpen) {
@@ -53,22 +49,8 @@ export default function DepositPaymentModal({
       isSubmittingRef.current = false;
       // Client idempotency key unique per checkout attempt session
       idempotencyKeyRef.current = `hm_idem_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-
-      trackEventSafe({
-        eventName: "checkout_opened",
-        context: {
-          restroomId: restroom.id,
-          businessId: restroom.business_id ?? null,
-          pagePath: `/restrooms/${restroom.id}`,
-          componentId: "deposit_payment_modal",
-        },
-        properties: {
-          restroom_id: restroom.id,
-          amount_krw: resolvedDepositAmount,
-        },
-      });
     }
-  }, [isOpen, restroom, resolvedDepositAmount]);
+  }, [isOpen]);
 
   // Handle ESC key to close modal
   useEffect(() => {
@@ -130,7 +112,7 @@ export default function DepositPaymentModal({
               type="button"
               onClick={() => router.push(`/login?returnTo=${encodeURIComponent(returnTo)}`)}
               data-testid="payment-login-redirect-btn"
-              className="flex min-h-[48px] w-full items-center justify-center rounded-xl bg-purple-600 px-4 py-3 text-sm font-bold text-white shadow-md hover:bg-purple-700 active:scale-[0.99] transition"
+              className="flex min-h-[48px] w-full items-center justify-center rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white shadow-md hover:bg-slate-800 active:scale-[0.99] transition dark:bg-blue-600 dark:hover:bg-blue-700"
             >
               로그인하러 가기
             </button>
@@ -176,14 +158,6 @@ export default function DepositPaymentModal({
       if (!orderRes.ok || !orderData.ok) {
         const errorMsg =
           orderData?.error?.message || "주문 생성에 실패했습니다. 잠시 후 다시 시도해주세요.";
-        const errorCode = orderData?.error?.code || "ORDER_CREATE_FAILED";
-
-        if (errorCode === "PAYMENT_MODE_DISABLED" || errorCode === "TOSS_CONFIG_REQUIRED") {
-          trackPaymentUnavailableShown({
-            restroom,
-            reason: errorCode,
-          });
-        }
 
         setErrorMessage(errorMsg);
         setCheckoutState("error");
@@ -283,59 +257,74 @@ export default function DepositPaymentModal({
           </button>
         </div>
 
-        {/* 테스트 모드 강조 배너 */}
-        <div className="mt-3 rounded-xl bg-amber-50 p-3 text-xs text-amber-900 border border-amber-200/80 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-900/60">
-          <p className="font-bold flex items-center gap-1.5">
-            <span>⚠️</span>
+        {/* 테스트 모드 안내 배너 (차분한 보조 안내) */}
+        <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-300">
+          <p className="flex items-center gap-1.5 font-medium">
+            <span aria-hidden="true">ℹ️</span>
             <span>테스트 결제 · 실제 돈은 청구되지 않음</span>
-          </p>
-          <p className="mt-1 text-[11px] leading-relaxed text-amber-800 dark:text-amber-300">
-            본 결제는 개발 및 QA 테스트 모드로 진행되며 토스페이먼츠 테스트 환경에서 실제 카드 대금이 청구되지 않습니다.
           </p>
         </div>
 
         {/* 결제 대상 및 금액 */}
-        <div className="mt-4 rounded-xl bg-slate-50 p-4 dark:bg-slate-800/50 space-y-2 text-xs">
-          <div className="flex justify-between items-center text-slate-600 dark:text-slate-400">
-            <span>이용 화장실</span>
-            <span className="font-bold text-slate-900 dark:text-slate-100">{restroom.name}</span>
+        <div className="mt-3 space-y-2 rounded-xl bg-slate-50 p-4 text-xs dark:bg-slate-800/50">
+          <div className="flex items-center justify-between gap-2 text-slate-600 dark:text-slate-400">
+            <span>결제 대상 화장실</span>
+            <span className="text-right font-bold text-slate-900 dark:text-slate-100">
+              {restroom.name}
+            </span>
           </div>
           {restroom.business?.name && (
-            <div className="flex justify-between items-center text-slate-600 dark:text-slate-400">
+            <div className="flex items-center justify-between gap-2 text-slate-600 dark:text-slate-400">
               <span>제휴 매장</span>
               <span className="font-semibold text-slate-800 dark:text-slate-200">
                 {restroom.business.name}
               </span>
             </div>
           )}
-          <div className="flex justify-between items-center pt-2 border-t border-slate-200/70 dark:border-slate-700/70">
-            <span className="font-medium text-slate-700 dark:text-slate-300">보증금 결제 금액</span>
-            <span className="text-base font-extrabold text-purple-600 dark:text-purple-400" data-testid="deposit-amount-display">
+          <div className="flex items-center justify-between border-t border-slate-200/70 pt-2 dark:border-slate-700/70">
+            <span className="font-medium text-slate-700 dark:text-slate-300">보증금</span>
+            <span
+              className="text-base font-extrabold text-purple-700 dark:text-purple-400"
+              data-testid="deposit-amount-display"
+            >
               {resolvedDepositAmount.toLocaleString()}원
             </span>
           </div>
         </div>
 
-        {/* 환급 및 PIN 규정 안내 */}
-        <div className="mt-4 rounded-xl border border-purple-100 bg-purple-50/60 p-3.5 text-xs text-purple-950 dark:border-purple-900/40 dark:bg-purple-950/30 dark:text-purple-200">
-          <p className="font-bold mb-1.5 flex items-center gap-1">
-            <span>📋</span>
-            <span>보증금 및 이용권 규정</span>
+        {/* 환급 핵심 조건 + 상세 규정 펼쳐보기 */}
+        <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3.5 text-xs text-slate-800 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">
+          <p className="font-medium leading-relaxed text-slate-800 dark:text-slate-200">
+            매장에서 구매한 영수증을 제출하고 관리자 승인을 받으면 보증금이 환급됩니다.
           </p>
-          <ul className="list-disc pl-4 space-y-1 text-[11px] leading-relaxed text-purple-900 dark:text-purple-300">
-            <li>
-              <strong>영수증 환급 조건:</strong> 제휴 매장 실제 이용(구매) 영수증 사진을 제출한 후, 관리자 수동 심사를 거쳐 승인 완료 시에만 보증금 전액이 환급(테스트 결제 취소)됩니다.
-            </li>
-            <li>
-              <strong>자동 환급 불가:</strong> OCR 자동 승인이 없으며, 영수증 미제출·기한 초과·타 매장 영수증 또는 심사 반려 시 보증금이 자동 환급되지 않습니다.
-            </li>
-            <li>
-              <strong>환급 신청 기한:</strong> 이용권 생성 시점부터 {receiptWindowHours}시간 이내
-            </li>
-            <li>
-              <strong>도어락 비밀번호:</strong> 결제 승인 완료 후에만 안전하게 공개되며 현재 화면에는 노출되지 않습니다.
-            </li>
-          </ul>
+
+          <details
+            data-testid="modal-policy-details"
+            className="mt-2.5 border-t border-slate-100 pt-2 dark:border-slate-800"
+          >
+            <summary className="flex min-h-[28px] cursor-pointer list-none items-center justify-between text-[11px] font-bold text-slate-700 dark:text-slate-300">
+              <span>상세 규정 펼쳐보기</span>
+              <span>▾</span>
+            </summary>
+            <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+              <li>
+                <strong>자동 환급 불가:</strong> OCR 자동 승인이 없으며, 영수증 미제출·기한 초과·타 매장 영수증 또는 심사 반려 시 환급되지 않습니다.
+              </li>
+              <li>
+                <strong>환급 신청 기한:</strong> 이용권 생성 시점부터 {receiptWindowHours}시간 이내
+              </li>
+              {typeof restroom.active_policy?.min_purchase_krw === "number" &&
+                restroom.active_policy.min_purchase_krw > 0 && (
+                  <li>
+                    <strong>최소 구매 기준:</strong>{" "}
+                    {restroom.active_policy.min_purchase_krw.toLocaleString()}원 이상 매장 이용 영수증
+                  </li>
+                )}
+              <li>
+                <strong>도어락 비밀번호:</strong> 결제 승인 완료 후에만 안전하게 공개되며 현재 화면에는 노출되지 않습니다.
+              </li>
+            </ul>
+          </details>
         </div>
 
         {/* 오류 메시지 영역 */}

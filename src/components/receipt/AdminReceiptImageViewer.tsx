@@ -197,20 +197,10 @@ export function AdminReceiptImageViewer({
       data-testid="admin-receipt-image-viewer"
       className="min-w-0 rounded-2xl border border-slate-200 bg-white p-3.5 dark:border-slate-800 dark:bg-slate-900"
     >
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5 dark:border-slate-800">
-        <div className="min-w-0">
-          <h3 className="text-xs font-bold text-slate-900 dark:text-white">
-            비공개 영수증 원본 이미지
-          </h3>
-          <p className="mt-0.5 break-all text-[11px] text-slate-500 dark:text-slate-400">
-            {originalFilename || "파일명 미제공"} · {mimeType} ·{" "}
-            {formatBytes(fileSizeBytes)}
-            {naturalSize
-              ? ` · ${naturalSize.width}×${naturalSize.height}px`
-              : ""}
-          </p>
-        </div>
-
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2 dark:border-slate-800">
+        <h3 className="text-xs font-bold text-slate-900 dark:text-white">
+          제출된 영수증 이미지
+        </h3>
         <span
           data-testid="receipt-image-security-badge"
           className="inline-flex shrink-0 items-center rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
@@ -218,21 +208,6 @@ export function AdminReceiptImageViewer({
           비공개 서명 URL
         </span>
       </div>
-
-      {remainingSeconds !== null && signedUrl && !isExpired && (
-        <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
-          <span data-testid="receipt-image-ttl">
-            열람 URL 남은 시간: {formatCountdown(remainingSeconds)}
-          </span>
-          <button
-            type="button"
-            onClick={fetchSignedImageUrl}
-            className="min-h-[36px] rounded-lg px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-950/40"
-          >
-            URL 재발급
-          </button>
-        </div>
-      )}
 
       <div className="mt-3">
         {isLoading ? (
@@ -272,16 +247,25 @@ export function AdminReceiptImageViewer({
           </div>
         ) : signedUrl ? (
           <div className="space-y-2.5">
-            <div className="flex justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-100 p-2 dark:border-slate-700 dark:bg-slate-950">
+            <button
+              type="button"
+              onClick={() => {
+                setZoomMode("fit");
+                setIsModalOpen(true);
+              }}
+              aria-label="영수증 이미지 크게 보기"
+              className="flex w-full justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-100 p-2 hover:border-blue-400 transition dark:border-slate-700 dark:bg-slate-950"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={signedUrl}
                 alt="고객이 제출한 영수증 이미지"
                 data-testid="receipt-preview-img"
                 onLoad={handleImageLoad}
                 onError={handleImageError}
-                className="max-h-[320px] w-auto max-w-full rounded object-contain"
+                className="max-h-[340px] w-auto max-w-full rounded object-contain"
               />
-            </div>
+            </button>
 
             <button
               type="button"
@@ -292,8 +276,37 @@ export function AdminReceiptImageViewer({
               }}
               className="flex min-h-[44px] w-full items-center justify-center rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-800 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
             >
-              원본 이미지 전체 보기 (확대 뷰어)
+              이미지 확대해서 보기
             </button>
+
+            <details className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-[11px] text-slate-500 dark:bg-slate-800/50 dark:text-slate-400">
+              <summary className="cursor-pointer font-medium">
+                이미지 파일 정보
+              </summary>
+              <div className="mt-1.5 space-y-1 border-t border-slate-200/70 pt-1.5 dark:border-slate-700">
+                <p className="break-all">
+                  {originalFilename || "파일명 미제공"} · {mimeType} ·{" "}
+                  {formatBytes(fileSizeBytes)}
+                  {naturalSize
+                    ? ` · ${naturalSize.width}×${naturalSize.height}px`
+                    : ""}
+                </p>
+                {remainingSeconds !== null && (
+                  <div className="flex items-center justify-between gap-2">
+                    <span data-testid="receipt-image-ttl">
+                      임시 URL 남은 시간: {formatCountdown(remainingSeconds)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={fetchSignedImageUrl}
+                      className="font-semibold text-blue-700 hover:underline dark:text-blue-300"
+                    >
+                      새로 불러오기
+                    </button>
+                  </div>
+                )}
+              </div>
+            </details>
           </div>
         ) : null}
       </div>

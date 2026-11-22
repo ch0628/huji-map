@@ -343,9 +343,7 @@ describe("작업 B: 인증·역할별 진입 흐름 및 내비게이션", () => 
       expect(
         screen.getByTestId("nav-link-admin-receipts").getAttribute("href")
       ).toBe("/admin/receipts");
-      expect(screen.getByTestId("nav-link-admin-leads").getAttribute("href")).toBe(
-        "/admin/leads"
-      );
+      expect(screen.queryByTestId("nav-link-admin-leads")).toBeNull();
       expect(screen.getByTestId("nav-link-admin-pmf").getAttribute("href")).toBe(
         "/admin/analytics/pmf"
       );
@@ -456,7 +454,7 @@ describe("작업 B: 인증·역할별 진입 흐름 및 내비게이션", () => 
       expect(screen.getByTestId("admin-card-refunds").getAttribute("href")).toBe(
         "/admin/refunds"
       );
-      expect(screen.getByTestId("admin-card-leads")).toBeDefined();
+      expect(screen.queryByTestId("admin-card-leads")).toBeNull();
       expect(screen.getByTestId("admin-card-pmf")).toBeDefined();
     });
   });

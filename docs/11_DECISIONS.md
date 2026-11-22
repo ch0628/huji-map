@@ -30,4 +30,8 @@
 - No refund to a real bank/card unless explicit later production deployment; test cancellation only.
 - Feature flags control visibility, but permission checks are always enforced by server.
 - Don't gate free public discovery behind sign-in or payment.
+- Optional behavioral analytics is strictly limited to 6 events (`map_loaded`, `restroom_marker_clicked`, `restroom_card_viewed`, `restroom_detail_opened`, `directions_clicked`, `payment_button_clicked`), requires explicit user opt-in (tri-state default `undecided` via full-screen first-visit consent UI `휴지맵 시작하기` shown first on `/` and public routes regardless of auth or env flag, with 4 plain-Korean accordions + expandable privacy details, SSR `hm_consent_pref` flash prevention, and user-menu `이용 통계 설정` modal; standalone `/privacy` & `/settings/privacy` pages retired and redirected to `/map?analyticsDetails=1` & `/map?analyticsSettings=1`), separates unauthenticated vs authenticated analytics via server-verified `user_id` without pre-login account stitching, and never alters core auth/payment/refund flows. A19 `TravelSurveyBanner` is permanently removed.
+- Receipt resubmission is permitted only when `submission_status === 'resubmission_requested'`; `rejected` stays blocked (`20261123000000`).
+- Identical restroom access policy updates are rejected (`409 POLICY_UNCHANGED` / `HM002`) without incrementing policy version (`20261123010000`).
+- Exact retention period and formal statutory disclosures require external legal review before public live launch.
 

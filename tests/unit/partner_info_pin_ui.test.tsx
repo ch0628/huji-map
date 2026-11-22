@@ -225,15 +225,37 @@ describe("Partner Restroom Operating Hours, PIN Manager & Policy Display Regress
     });
 
     it("rejects mismatched PIN confirmation and submits valid PIN without echoing it", async () => {
-      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce({
           ok: true,
-          codeVersion: 2,
-          updatedAt: "2026-11-18T12:00:00Z",
-          requestId: "req-1",
-        }),
-      } as Response);
+          json: async () => ({
+            ok: true,
+            pin: "1234",
+            codeVersion: 1,
+            updatedAt: "2026-11-17T12:00:00Z",
+            requestId: "req-get-1",
+          }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            ok: true,
+            codeVersion: 2,
+            updatedAt: "2026-11-18T12:00:00Z",
+            requestId: "req-1",
+          }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            ok: true,
+            pin: "4829*",
+            codeVersion: 2,
+            updatedAt: "2026-11-18T12:00:00Z",
+            requestId: "req-get-2",
+          }),
+        } as Response);
 
       const onPinUpdated = vi.fn();
       render(
@@ -251,6 +273,13 @@ describe("Partner Restroom Operating Hours, PIN Manager & Policy Display Regress
       );
 
       expect(screen.getByTestId("pin-status-badge").textContent).toContain("v1");
+      await waitFor(() => {
+        expect(screen.getByTestId("merchant-current-pin-value").textContent).toBe("1234");
+      });
+
+      // Change form is collapsed until user clicks "비밀번호 변경하기"
+      expect(screen.queryByTestId("restroom-pin-form")).toBeNull();
+      fireEvent.click(screen.getByTestId("merchant-open-pin-change-btn"));
 
       fireEvent.change(screen.getByTestId("pin-input"), {
         target: { value: "4829*" },
@@ -263,7 +292,7 @@ describe("Partner Restroom Operating Hours, PIN Manager & Policy Display Regress
       expect(screen.getByTestId("pin-manager-error").textContent).toContain(
         "일치하지 않습니다"
       );
-      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
 
       fireEvent.change(screen.getByTestId("pin-confirm-input"), {
         target: { value: "4829*" },
@@ -271,12 +300,12 @@ describe("Partner Restroom Operating Hours, PIN Manager & Policy Display Regress
       fireEvent.click(screen.getByTestId("pin-submit-button"));
 
       await waitFor(() => {
-        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        expect(fetchSpy).toHaveBeenCalledTimes(3);
       });
 
       expect(screen.getByTestId("pin-manager-success").textContent).toContain("v2");
-      // Plaintext PIN must be cleared from inputs and never displayed in success message
-      expect((screen.getByTestId("pin-input") as HTMLInputElement).value).toBe("");
+      // Change form closes after save and plaintext PIN is never echoed in success message
+      expect(screen.queryByTestId("restroom-pin-form")).toBeNull();
       expect(screen.getByTestId("pin-manager-success").textContent).not.toContain("4829*");
       expect(onPinUpdated).toHaveBeenCalledWith(
         expect.objectContaining({ hasActivePin: true, codeVersion: 2 })

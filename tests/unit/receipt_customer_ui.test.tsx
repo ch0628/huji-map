@@ -67,12 +67,12 @@ describe("ReceiptItemCard", () => {
     refundCompletedAt: null,
   };
 
-  it("영수증 카드 기본 정보(매장명, 화장실명, 파일명, 보증금)를 렌더링한다", () => {
+  it("영수증 카드 기본 정보(매장명, 화장실명, 보증금)를 렌더링하고 불필요한 파일명을 숨긴다", () => {
     render(<ReceiptItemCard receipt={mockReceipt} />);
 
     expect(screen.getByText(/테스트 카페 수원점/)).toBeDefined();
     expect(screen.getByText("테스트 1호 화장실")).toBeDefined();
-    expect(screen.getByText(/my_coffee_receipt.jpg/)).toBeDefined();
+    expect(screen.queryByText(/my_coffee_receipt.jpg/)).toBeNull();
     expect(screen.getByText(/1,000원 \(테스트\)/)).toBeDefined();
     expect(screen.getByTestId("card-receipt-status-badge").textContent).toContain("관리자 검토 중");
   });
@@ -165,7 +165,7 @@ describe("ReceiptUploadForm", () => {
     );
   });
 
-  it("유효한 이미지 선택 시 미리보기가 렌더링되고 제출 버튼이 활성화된다", () => {
+  it("유효한 이미지 선택 시 미리보기가 렌더링되고 불필요한 파일 메타데이터는 숨겨지며 제출 버튼이 활성화된다", () => {
     render(
       <ReceiptUploadForm accessSessionId="sess-1234-5678" />
     );
@@ -178,7 +178,8 @@ describe("ReceiptUploadForm", () => {
     fireEvent.change(input, { target: { files: [validFile] } });
 
     expect(screen.getByTestId("receipt-preview-img")).toBeDefined();
-    expect(screen.getByText(/valid_receipt.png/)).toBeDefined();
+    expect(screen.queryByText(/valid_receipt\.png/)).toBeNull();
+    expect(screen.queryByText(/image\/png/)).toBeNull();
     expect((screen.getByTestId("receipt-upload-submit-btn") as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -255,9 +256,15 @@ describe("ReceiptUploadForm", () => {
       );
     });
 
-    // 제출 완료 화면 표시 검증
+    // 제출 완료 화면 표시 검증 (UI-11 / TASK-02 D)
     expect(screen.getByTestId("receipt-upload-completed")).toBeDefined();
-    expect(screen.getByTestId("completed-receipt-status").textContent).toContain("관리자 검토 중 (OCR/자동 승인 없음)");
+    expect(screen.getByTestId("receipt-upload-completed").textContent).toContain(
+      "영수증이 제출되었습니다."
+    );
+    expect(screen.getByTestId("completed-receipt-status").textContent).toContain(
+      "영수증이 승인되면 환급 절차가 진행됩니다."
+    );
+    expect(screen.getByTestId("receipt-completed-preview-img")).toBeDefined();
 
     // 확인 버튼 클릭 시 onSuccess 호출 검증
     fireEvent.click(screen.getByTestId("receipt-upload-done-btn"));
@@ -389,5 +396,194 @@ describe("ReceiptListClient", () => {
     expect(screen.getByTestId("empty-eligible-sessions-box").textContent).toContain(
       "영수증을 제출할 이용권이 없습니다"
     );
+  });
+
+  it("TASK-02 A/B: accessSessionId 직접 진입 시 상태별로 제출 허용/차단 및 이미지 재시도를 올바르게 처리한다", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        signedUrl: "https://signed.example/receipt.jpg",
+        expiresIn: 300,
+      }),
+    } as Response);
+
+    const baseReceipt: CustomerReceiptItem = {
+      id: "rec-sub-1",
+      accessSessionId: "sess-direct-1",
+      userId: "user-1",
+      storagePath: "receipts/user-1/sess-direct-1/1.jpg",
+      mimeType: "image/jpeg",
+      fileSizeBytes: 2048,
+      originalFilename: "r1.jpg",
+      submissionStatus: "submitted",
+      storeNameConfirmed: null,
+      purchaseAtConfirmed: null,
+      purchaseAmountKrw: null,
+      reviewReason: null,
+      reviewedAt: null,
+      createdAt: "2026-11-16T10:00:00Z",
+      restroomName: "숨겨진 화장실",
+      partnerName: "숨겨진 매장",
+      roadAddress: "수원",
+      depositAmountKrw: 1000,
+      refundStatus: "none",
+      refundAmountKrw: null,
+      refundCompletedAt: null,
+    };
+
+    const otherSessionReceipt: CustomerReceiptItem = {
+      ...baseReceipt,
+      id: "rec-other-1",
+      accessSessionId: "sess-other-999",
+      restroomName: "다른 이용권 화장실",
+      partnerName: "다른 이용권 매장",
+    };
+
+    // 1. submitted -> '영수증을 확인하고 있습니다.' + image, NO upload form, NO tabs/other sessions
+    const { rerender } = render(
+      <ReceiptListClient
+        initialSelectedSessionId="sess-direct-1"
+        initialData={{
+          receipts: [baseReceipt, otherSessionReceipt],
+          eligibleSessions: [],
+        }}
+      />
+    );
+    expect(screen.queryByTestId("tab-submitted-receipts")).toBeNull();
+    expect(screen.queryByTestId("receipt-upload-form")).toBeNull();
+    expect(screen.queryByText("다른 이용권 화장실")).toBeNull();
+    expect(screen.getByTestId("direct-receipt-status-message").textContent).toBe(
+      "영수증을 확인하고 있습니다."
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("customer-receipt-signed-img")).toBeDefined();
+    });
+
+    // 2. rejected -> '영수증이 반려되었습니다.' + reason, NO upload form
+    rerender(
+      <ReceiptListClient
+        initialSelectedSessionId="sess-direct-1"
+        initialData={{
+          receipts: [
+            {
+              ...baseReceipt,
+              submissionStatus: "rejected",
+              reviewReason: "매장 불일치",
+            },
+          ],
+          eligibleSessions: [],
+        }}
+      />
+    );
+    expect(screen.queryByTestId("receipt-upload-form")).toBeNull();
+    expect(screen.getByTestId("direct-receipt-status-message").textContent).toBe(
+      "영수증이 반려되었습니다."
+    );
+    expect(screen.getByTestId("direct-receipt-reason").textContent).toContain("매장 불일치");
+
+    // 3. approved -> '영수증이 승인되었습니다.' + refund status, NO upload form
+    rerender(
+      <ReceiptListClient
+        initialSelectedSessionId="sess-direct-1"
+        initialData={{
+          receipts: [
+            {
+              ...baseReceipt,
+              submissionStatus: "approved",
+              refundStatus: "completed",
+            },
+          ],
+          eligibleSessions: [],
+        }}
+      />
+    );
+    expect(screen.queryByTestId("receipt-upload-form")).toBeNull();
+    expect(screen.getByTestId("direct-receipt-status-message").textContent).toBe(
+      "영수증이 승인되었습니다."
+    );
+    expect(screen.getByTestId("direct-receipt-refund-status").textContent).toContain(
+      "환급이 완료되었습니다."
+    );
+
+    // 4. resubmission_requested -> '영수증을 다시 제출해 주세요.' + reason + upload form allowed
+    rerender(
+      <ReceiptListClient
+        initialSelectedSessionId="sess-direct-1"
+        initialData={{
+          receipts: [
+            {
+              ...baseReceipt,
+              submissionStatus: "resubmission_requested",
+              reviewReason: "금액이 흐립니다",
+            },
+          ],
+          eligibleSessions: [],
+        }}
+      />
+    );
+    expect(screen.getByTestId("direct-receipt-status-card").textContent).toContain(
+      "영수증을 다시 제출해 주세요."
+    );
+    expect(screen.getByTestId("direct-receipt-reason").textContent).toContain("금액이 흐립니다");
+    expect(screen.getByTestId("receipt-upload-form")).toBeDefined();
+  });
+
+  it("TASK-02 C: 메뉴 직접 진입 시 이용권당 요약 카드 1개만 표시하고 최신 상태 우선 및 이전 기록 접힘을 유지한다", async () => {
+    const olderResubmit: CustomerReceiptItem = {
+      id: "rec-old",
+      accessSessionId: "sess-multi",
+      userId: "user-1",
+      storagePath: "receipts/u/sess-multi/old.jpg",
+      mimeType: "image/jpeg",
+      fileSizeBytes: 1024,
+      originalFilename: "old.jpg",
+      submissionStatus: "resubmission_requested",
+      storeNameConfirmed: null,
+      purchaseAtConfirmed: null,
+      purchaseAmountKrw: null,
+      reviewReason: "이전 흐린 사진",
+      reviewedAt: "2026-11-15T11:00:00Z",
+      createdAt: "2026-11-15T10:00:00Z",
+      restroomName: "행궁 화장실",
+      partnerName: "행궁 카페",
+      roadAddress: "수원시 팔달구",
+      depositAmountKrw: 1000,
+      refundStatus: "none",
+      refundAmountKrw: null,
+      refundCompletedAt: null,
+    };
+    const newerSubmitted: CustomerReceiptItem = {
+      ...olderResubmit,
+      id: "rec-new",
+      storagePath: "receipts/u/sess-multi/new.jpg",
+      submissionStatus: "submitted",
+      reviewReason: null,
+      reviewedAt: null,
+      createdAt: "2026-11-16T10:00:00Z",
+    };
+
+    render(
+      <ReceiptListClient
+        initialData={{
+          // Intentionally pass older first to ensure latest wins regardless of array order
+          receipts: [olderResubmit, newerSubmitted],
+          eligibleSessions: [],
+        }}
+      />
+    );
+
+    expect(screen.getByTestId("tab-submitted-receipts").textContent).toContain("제출 내역 (1)");
+    expect(screen.getAllByTestId("customer-receipt-card")).toHaveLength(1);
+    expect(screen.getByTestId("receipt-pending-status-msg").textContent).toBe(
+      "영수증을 확인하고 있습니다."
+    );
+    expect(screen.queryByTestId("resubmit-receipt-btn")).toBeNull();
+    expect(screen.queryByTestId("previous-receipts-list")).toBeNull();
+
+    // Expand previous records
+    fireEvent.click(screen.getByTestId("toggle-previous-receipts-btn"));
+    expect(screen.getByTestId("previous-receipts-list")).toBeDefined();
+    expect(screen.getByText(/이전 흐린 사진/)).toBeDefined();
   });
 });

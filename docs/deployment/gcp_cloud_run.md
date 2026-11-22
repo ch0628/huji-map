@@ -247,7 +247,7 @@ gcloud run services add-iam-policy-binding hujimap-staging \
 | `_NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | `<SUPABASE_PUBLISHABLE_KEY>` | 공개 Publishable 키 |
 | `_NEXT_PUBLIC_KAKAO_MAP_JS_KEY` | `<KAKAO_JS_KEY>` | 카카오 지도 JS 키 |
 | `_NEXT_PUBLIC_TOSS_TEST_CLIENT_KEY` | `test_ck_...` (또는 빈 값) | `live_` 금지 |
-| `_NEXT_PUBLIC_ANALYTICS_ENABLED` | `false` (또는 `true`) | 분석 플래그 |
+| `_NEXT_PUBLIC_ANALYTICS_ENABLED` | `true` (스테이징, `cloudbuild.yaml` 기본값) / `false` (비활성 시) | Next.js 빌드 시점 주입. 명시 동의(`undecided` 기본값, 첫 방문 전체 화면형 동의 UI 또는 `이용 통계 설정` 모달에서 동의) 시에만 비로그인·로그인 6개 이벤트 분리 수집 |
 
 > [!WARNING]
 > 치환 변수 목록에는 **절대로** `SUPABASE_SECRET_KEY`, `TOSS_TEST_SECRET_KEY`, `PIN_ENCRYPTION_KEY_BASE64` 원문 값을 넣지 마세요. 이 값들은 Cloud Build 로그나 트리거 설정 화면에 노출될 수 있으므로 Secret Manager 이름(`_SECRET_*`)만 연결합니다.
@@ -381,8 +381,9 @@ gcloud run services update-traffic hujimap-staging \
 
 이번 배포 준비 작업에서는 원격 Supabase 스키마와 데이터를 변경하지 않았습니다. 실제 스테이징 서비스 운영 전, 아래 항목을 별도로 점검·실행하세요.
 
-- [ ] **마이그레이션 동기화 확인**: `npx supabase migration list --remote`로 로컬과 원격 마이그레이션(17건 등 최신 상태) 일치 여부 확인
-- [ ] **공공화장실 데이터(586건) 적재**: 원격 Supabase에는 공공화장실 데이터 586건이 아직 적재되지 않았으므로, `docs/import_runbook.md` 절차에 따라 원격 대상 `--dry-run` 확인 후 사용자 승인 하에 `--live --confirm` 적재 실행
+- [x] **마이그레이션 동기화 확인**: `npx supabase migration list --remote`로 로컬과 원격 마이그레이션(22건, `20261106000000` ~ `20261123010000`) 일치 확인 완료
+- [ ] **공공화장실 데이터 범위 구분**: 원격 Supabase에는 수원시 공공화장실 `502`건(`gg_publtolt_15011425`) + 테스트 제휴/픽스처 데이터만 적재되어 있으며, 로컬 전체 공공화장실 데이터(`51,264`건)의 전국 원격 이전은 별도 승인 후 진행
+- [ ] **스테이징 분석 활성화 적용**: `cloudbuild.yaml`에 `_NEXT_PUBLIC_ANALYTICS_ENABLED: "true"`가 반영되어 있으나, 실제 `hujimap-staging` 적용은 Git push 및 Cloud Build 배포 완료 후 유효 (배포 전까지는 이전 Revision 동작 유지). 배포 후 `/`·`/map` 첫 방문 전체 화면형 동의 UI(`휴지맵 시작하기`, 접이식 4항목 및 상세 개인정보 처리 안내), 메뉴 `이용 통계 설정` 모달, `/privacy`·`/settings/privacy` 리다이렉트, 비로그인/로그인 이벤트 분리, `/admin/analytics/pmf` `전체`/`비로그인`/`로그인` 필터 동작 확인 필요
 - [ ] **`feature_flags` 확인**: `public_restroom_discovery`, `partner_restroom_discovery`, `payment_test_mode` 활성화 여부를 운영/스테이징 목적에 맞게 확인
 - [ ] **Private Storage 버킷 확인**: `receipts` 및 화장실 사진 버킷의 비공개(`public = false`) 설정 및 RLS 정책 동작 확인
 - [ ] **Auth URL Configuration**: 위 10단계의 Site URL 및 Redirect URLs 등록 완료 확인

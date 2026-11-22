@@ -4,6 +4,7 @@
  */
 
 import type {
+  AnalyticsConsentStatus,
   DirectClientEventName,
   ClientEventPayload,
   CreateSessionInput,
@@ -11,32 +12,53 @@ import type {
   SessionCreateResult,
   TravelAnswerResult,
 } from "./types";
-import { SERVER_ONLY_EVENTS } from "./types";
+import {
+  CONSENT_PREF_COOKIE_NAME,
+  PRIVACY_POLICY_VERSION,
+  SERVER_ONLY_EVENTS,
+} from "./types";
 import type { DeviceType } from "@/lib/db/types";
 
 const BROWSER_ID_STORAGE_KEY = "hm_browser_id";
 const SESSION_ID_STORAGE_KEY = "hm_session_id";
 const SESSION_TOKEN_STORAGE_KEY = "hm_session_token";
+const SESSION_AUTH_STATE_STORAGE_KEY = "hm_session_auth_state";
 const CONSENT_STORAGE_KEY = "hm_consent_state";
 
+export const ANALYTICS_CONSENT_CHANGED_EVENT = "hm-analytics-consent-changed";
+export const ANALYTICS_SESSION_RESET_EVENT = "hm-analytics-session-reset";
+export const OPEN_ANALYTICS_SETTINGS_EVENT = "hm-open-analytics-settings";
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export interface UserConsentState {
+  analyticsStatus: AnalyticsConsentStatus;
   analytics: boolean;
+  decidedAt?: string | null;
+  withdrawnAt?: string | null;
   marketing: boolean;
   terms: boolean;
   privacy: boolean;
   policyVersion: string;
+  updatedAt?: string;
 }
 
 const DEFAULT_CONSENT: UserConsentState = {
-  analytics: true,
+  analyticsStatus: "undecided",
+  analytics: false,
+  decidedAt: null,
+  withdrawnAt: null,
   marketing: false,
-  terms: true,
-  privacy: true,
-  policyVersion: "2026-11-06",
+  terms: false,
+  privacy: false,
+  policyVersion: PRIVACY_POLICY_VERSION,
 };
 
 /**
  * Retrieves the current user consent state from localStorage.
+ * Defaults to analyticsStatus: "undecided" (analytics: false, strict opt-in).
+ * Invalidates prior consent if the privacy policy version substantially changed.
  */
 export function getConsentState(): UserConsentState {
   if (typeof window === "undefined") {
@@ -46,9 +68,29 @@ export function getConsentState(): UserConsentState {
     const raw = window.localStorage.getItem(CONSENT_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
+      const storedVersion =
+        typeof parsed?.policyVersion === "string" ? parsed.policyVersion : null;
+      if (storedVersion !== null && storedVersion !== PRIVACY_POLICY_VERSION) {
+        return DEFAULT_CONSENT;
+      }
+
+      let status: AnalyticsConsentStatus = "undecided";
+      if (
+        parsed?.analyticsStatus === "accepted" ||
+        parsed?.analyticsStatus === "declined" ||
+        parsed?.analyticsStatus === "undecided"
+      ) {
+        status = parsed.analyticsStatus;
+      } else if (parsed?.analytics === true) {
+        status = "accepted";
+      }
+
       return {
         ...DEFAULT_CONSENT,
         ...parsed,
+        analyticsStatus: status,
+        analytics: status === "accepted",
+        policyVersion: storedVersion ?? PRIVACY_POLICY_VERSION,
       };
     }
   } catch {}
@@ -56,25 +98,235 @@ export function getConsentState(): UserConsentState {
 }
 
 /**
- * Updates the user consent state in localStorage.
+ * Checks whether the user has explicitly consented to optional analytics.
+ */
+export function hasAnalyticsConsent(): boolean {
+  return getConsentState().analyticsStatus === "accepted";
+}
+
+/**
+ * Returns the tri-state analytics consent decision ("undecided" | "accepted" | "declined").
+ */
+export function getAnalyticsConsentStatus(): AnalyticsConsentStatus {
+  return getConsentState().analyticsStatus;
+}
+
+/**
+ * Dispatches an application-wide request to open the analytics settings modal.
+ */
+export function openAnalyticsSettingsModal(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.dispatchEvent(new CustomEvent(OPEN_ANALYTICS_SETTINGS_EVENT));
+  } catch {}
+}
+
+/**
+ * Syncs the non-identifying UI preference cookie so SSR can avoid consent flicker.
+ * Stores only policyVersion + "accepted"|"declined" (never browserId or sessionId).
+ */
+export function syncConsentPrefCookie(
+  status: AnalyticsConsentStatus,
+  policyVersion: string = PRIVACY_POLICY_VERSION
+): void {
+  if (typeof document === "undefined") return;
+  try {
+    if (status === "accepted" || status === "declined") {
+      const value = encodeURIComponent(`${policyVersion}:${status}`);
+      document.cookie = `${CONSENT_PREF_COOKIE_NAME}=${value}; path=/; max-age=31536000; samesite=lax`;
+    } else {
+      document.cookie = `${CONSENT_PREF_COOKIE_NAME}=; path=/; max-age=0; samesite=lax`;
+    }
+  } catch {}
+}
+
+/**
+ * Updates the user consent state in localStorage and notifies listeners.
+ * When analytics consent is not accepted, clears analytics identifiers from browser storage.
  */
 export function setConsentState(state: Partial<UserConsentState>): void {
   if (typeof window === "undefined") return;
   try {
     const current = getConsentState();
+    const now = new Date().toISOString();
+
+    let nextStatus: AnalyticsConsentStatus = current.analyticsStatus;
+    if (
+      state.analyticsStatus === "undecided" ||
+      state.analyticsStatus === "accepted" ||
+      state.analyticsStatus === "declined"
+    ) {
+      nextStatus = state.analyticsStatus;
+    } else if (state.analytics === true) {
+      nextStatus = "accepted";
+    } else if (state.analytics === false) {
+      nextStatus = "declined";
+    }
+
+    const nextDecidedAt =
+      nextStatus === "undecided"
+        ? null
+        : state.decidedAt ?? current.decidedAt ?? now;
+    const nextWithdrawnAt =
+      nextStatus === "accepted"
+        ? null
+        : state.withdrawnAt !== undefined
+        ? state.withdrawnAt
+        : current.analyticsStatus === "accepted" && nextStatus === "declined"
+        ? now
+        : current.withdrawnAt ?? null;
+
     const updated: UserConsentState = {
       ...current,
       ...state,
+      analyticsStatus: nextStatus,
+      analytics: nextStatus === "accepted",
+      decidedAt: nextDecidedAt,
+      withdrawnAt: nextWithdrawnAt,
+      policyVersion: state.policyVersion ?? PRIVACY_POLICY_VERSION,
+      updatedAt: now,
     };
     window.localStorage.setItem(CONSENT_STORAGE_KEY, JSON.stringify(updated));
+    syncConsentPrefCookie(updated.analyticsStatus, updated.policyVersion);
+    if (updated.analyticsStatus !== "accepted") {
+      clearAnalyticsClientState();
+    }
+    window.dispatchEvent(
+      new CustomEvent(ANALYTICS_CONSENT_CHANGED_EVENT, {
+        detail: {
+          analytics: updated.analytics,
+          analyticsStatus: updated.analyticsStatus,
+        },
+      })
+    );
   } catch {}
 }
 
 /**
- * Checks whether analytics event tracking is permitted by the user consent policy.
+ * Clears persistent analytics browser ID and session state from browser storage.
+ */
+export function clearAnalyticsClientState(): void {
+  sessionInitPromise = null;
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(BROWSER_ID_STORAGE_KEY);
+  } catch {}
+  try {
+    window.sessionStorage.removeItem(SESSION_ID_STORAGE_KEY);
+    window.sessionStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
+    window.sessionStorage.removeItem(SESSION_AUTH_STATE_STORAGE_KEY);
+  } catch {}
+}
+
+/**
+ * Isolates visitor sessions across login/logout transitions without altering analytics consent
+ * or linking anonymous pre-login sessions to authenticated accounts.
+ */
+export function syncAnalyticsAuthBoundary(isAuthenticated: boolean): boolean {
+  if (typeof window === "undefined") return false;
+  const nextAuthState = isAuthenticated ? "auth" : "guest";
+  try {
+    const prevAuthState = window.sessionStorage.getItem(
+      SESSION_AUTH_STATE_STORAGE_KEY
+    );
+    window.sessionStorage.setItem(SESSION_AUTH_STATE_STORAGE_KEY, nextAuthState);
+    if (prevAuthState && prevAuthState !== nextAuthState) {
+      sessionInitPromise = null;
+      window.sessionStorage.removeItem(SESSION_ID_STORAGE_KEY);
+      window.sessionStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
+      window.dispatchEvent(
+        new CustomEvent(ANALYTICS_SESSION_RESET_EVENT, {
+          detail: { isAuthenticated },
+        })
+      );
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+/**
+ * Reads an existing valid browser ID without creating or persisting a new one.
+ */
+export function getExistingBrowserId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const existing = window.localStorage.getItem(BROWSER_ID_STORAGE_KEY);
+    if (existing && UUID_REGEX.test(existing)) {
+      return existing;
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Checks whether client-side optional analytics collection is enabled by environment config.
+ * Must be explicitly set to "true" to transmit optional behavioral analytics telemetry.
+ */
+export function isAnalyticsEnvEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_ANALYTICS_ENABLED === "true";
+}
+
+/**
+ * Checks whether analytics event tracking is permitted by both environment flag
+ * and explicit user opt-in consent (analytics === true).
  */
 export function isAnalyticsAllowed(): boolean {
-  return getConsentState().analytics !== false;
+  if (!isAnalyticsEnvEnabled()) {
+    return false;
+  }
+  return getConsentState().analytics === true;
+}
+
+/**
+ * Persists user consent decision both locally and (when possible) on the server consent_records table.
+ * On withdrawal (accepted === false), records withdrawal with the existing browserId if present,
+ * then immediately removes hm_browser_id and session storage identifiers.
+ */
+export async function updateAnalyticsConsent(
+  accepted: boolean
+): Promise<{
+  analytics: boolean;
+  analyticsStatus: AnalyticsConsentStatus;
+  recordedOnServer: boolean;
+}> {
+  const existingBrowserId = getExistingBrowserId();
+  let browserIdForRecord = existingBrowserId;
+
+  if (accepted && !browserIdForRecord && isAnalyticsEnvEnabled()) {
+    browserIdForRecord = getOrCreateBrowserId();
+  }
+
+  const nextStatus: AnalyticsConsentStatus = accepted ? "accepted" : "declined";
+  let recordedOnServer = false;
+  if (typeof window !== "undefined") {
+    try {
+      const res = await fetch("/api/v1/privacy/consent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          analytics: accepted,
+          analyticsStatus: nextStatus,
+          browserId: browserIdForRecord,
+          policyVersion: PRIVACY_POLICY_VERSION,
+        }),
+      });
+      if (res.ok) {
+        const body = await res.json().catch(() => null);
+        recordedOnServer = Boolean(body?.data?.recordedOnServer);
+      }
+    } catch {
+      recordedOnServer = false;
+    }
+  }
+
+  setConsentState({
+    analyticsStatus: nextStatus,
+    analytics: accepted,
+    policyVersion: PRIVACY_POLICY_VERSION,
+  });
+
+  return { analytics: accepted, analyticsStatus: nextStatus, recordedOnServer };
 }
 
 /**
@@ -199,6 +451,10 @@ let sessionInitPromise: Promise<string | null> | null = null;
 export async function ensureVisitorSession(
   options?: Partial<CreateSessionInput>
 ): Promise<string | null> {
+  if (!isAnalyticsAllowed()) {
+    return null;
+  }
+
   const existing = getActiveSessionId();
   if (existing) {
     return existing;

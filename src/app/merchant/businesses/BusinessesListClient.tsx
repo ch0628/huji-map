@@ -96,11 +96,11 @@ export default function BusinessesListClient({
           className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-slate-50/50 px-4 py-12 text-center dark:border-slate-800 dark:bg-slate-900/30"
         >
           <div className="mb-2 text-4xl">🏪</div>
-          <h2 className="text-sm font-bold text-slate-800 dark:text-slate-200">
+          <h2 className="text-sm font-bold text-slate-800 dark:text-slate-200 break-keep">
             등록된 가게가 없습니다
           </h2>
-          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400 max-w-xs">
-            휴지맵에 내 가게를 등록하고, 손님들에게 안심 화장실을 제공해 보세요. 등록비는 무료입니다.
+          <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400 max-w-lg sm:max-w-none break-keep leading-relaxed">
+            휴지맵에 내 가게를 등록하고, 손님들에게 안심 화장실을 제공해 보세요.
           </p>
           <Link
             href="/merchant/businesses/new"
@@ -121,10 +121,10 @@ export default function BusinessesListClient({
       {/* 안내 박스 */}
       <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-400">
         <p className="font-semibold text-slate-800 dark:text-slate-200">ℹ️ 가게 등록 및 승인 안내</p>
-        <ul className="mt-1.5 list-disc pl-4 space-y-1 text-[11px]">
-          <li>가게 등록 신청은 무료이며, 월 구독료나 결제를 요구하지 않습니다.</li>
-          <li>가게 정보를 작성하면 <span className="font-medium text-amber-600">작성 중(draft)</span>으로 저장됩니다.</li>
-          <li>정보 입력을 마친 뒤 <span className="font-medium text-emerald-600">심사 요청</span>을 누르면 관리자 검토(pending)가 진행됩니다.</li>
+        <ul className="mt-1.5 list-disc pl-4 space-y-1 text-[11px] break-keep leading-relaxed">
+          <li>가게 등록 신청은 무료입니다.</li>
+          <li>가게 정보를 작성하면 작성 중으로 저장됩니다.</li>
+          <li>정보 입력을 마친 뒤 심사 요청을 누르면 관리자 검토가 진행됩니다.</li>
           <li>관리자 승인 완료 후에는 제휴 화장실 등록 및 운영 권한이 활성화됩니다.</li>
         </ul>
       </div>

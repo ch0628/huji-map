@@ -400,10 +400,10 @@ async function runTests() {
       '[data-testid="completed-receipt-status"]'
     );
     const statusText = await completedStatus.innerText();
-    if (!statusText.includes("관리자 검토 중 (OCR/자동 승인 없음)")) {
+    if (!statusText.includes("영수증이 승인되면 환급 절차가 진행됩니다")) {
       throw new Error(`Unexpected completed status text: ${statusText}`);
     }
-    console.log("✓ Upload submission complete & shows '관리자 검토 중'");
+    console.log("✓ Upload submission complete & shows approval refund guidance");
 
     // 완료 확인 버튼 클릭
     await page.click('[data-testid="receipt-upload-done-btn"]');

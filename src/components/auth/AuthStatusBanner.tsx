@@ -142,20 +142,7 @@ export default function AuthStatusBanner({
         >
           <p className="font-semibold">로그인 세션이 만료되었습니다</p>
           <p className="mt-1 leading-relaxed">
-            보안을 위해 자동 로그아웃되었습니다. 제휴 화장실 결제 또는 가게 관리를 계속하려면 다시 로그인해 주세요.
-          </p>
-        </div>
-      )}
-
-      {reason === "login_required" && !authenticated && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="rounded-xl border border-blue-200 bg-blue-50 p-3.5 text-xs text-blue-900 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200"
-        >
-          <p className="font-semibold">로그인이 필요한 기능입니다</p>
-          <p className="mt-1 leading-relaxed">
-            무료 공공화장실 탐색과 길찾기는 로그인 없이 이용 가능하며, 제휴 화장실 보증금 테스트 결제 및 가게 관리에서만 로그인이 필요합니다.
+            다시 로그인해 주세요.
           </p>
         </div>
       )}

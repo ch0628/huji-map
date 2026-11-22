@@ -5,8 +5,12 @@
  */
 
 import { createAdminClient, isServiceRoleConfigured } from "@/lib/supabase/server";
-import { encryptPin, computePinHmac, PinCryptoError } from "./crypto";
-import { setRestroomPinSchema, type SetPinResponse } from "./types";
+import { encryptPin, decryptPin, computePinHmac, PinCryptoError } from "./crypto";
+import {
+  setRestroomPinSchema,
+  type SetPinResponse,
+  type GetMerchantPinResponse,
+} from "./types";
 
 export class RestroomPinServiceError extends Error {
   code: string;
@@ -215,5 +219,308 @@ export async function setOrRotateRestroomPin(params: {
     updatedAt: resultData.valid_from,
     requestId,
     action: resultData.action,
+  };
+}
+
+async function recordMerchantPinAudit(
+  adminClient: any,
+  params: {
+    userId: string;
+    restroomId: string;
+    secretId?: string | null;
+    codeVersion?: number | null;
+    result: "success" | "denied" | "error";
+    reason: string;
+    requestId: string;
+    role?: string | null;
+  }
+) {
+  const { userId, restroomId, secretId, codeVersion, result, reason, requestId, role } = params;
+
+  try {
+    await adminClient.from("audit_logs").insert({
+      actor_user_id: userId,
+      action: result === "success" ? "merchant_pin_view" : "merchant_pin_view_denied",
+      entity_type: secretId ? "restroom_lock_secret" : "restroom",
+      entity_id: secretId || restroomId,
+      before_data: null,
+      after_data: {
+        restroom_id: restroomId,
+        code_version: codeVersion ?? null,
+        result,
+        role: role ?? null,
+        request_id: requestId,
+      },
+      reason,
+    });
+  } catch {
+    // Best-effort audit write (never echoes sensitive secrets)
+  }
+
+  try {
+    await adminClient.from("pin_reveal_audits").insert({
+      access_session_id: null,
+      user_id: userId,
+      restroom_id: restroomId,
+      code_version: codeVersion ?? null,
+      result,
+      reason,
+      request_id: requestId,
+    });
+  } catch {
+    // Best-effort audit write
+  }
+}
+
+/**
+ * Authorizes an active merchant operator (owner/manager) of an approved business
+ * (or admin) and decrypts the active doorlock PIN strictly in server memory.
+ *
+ * Invariant: Plaintext PIN is NEVER stored in DB, logs, or analytics.
+ * Invariant: Records append-only audit log on both allowed and denied attempts.
+ */
+export async function getMerchantRestroomPin(params: {
+  restroomId: string;
+  userId: string;
+  requestId: string;
+}): Promise<GetMerchantPinResponse> {
+  const { restroomId, userId, requestId } = params;
+
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!restroomId || !uuidRegex.test(restroomId)) {
+    throw new RestroomPinServiceError(
+      "VALIDATION_ERROR",
+      "유효한 화장실 UUID가 아닙니다.",
+      400
+    );
+  }
+  if (!userId || !uuidRegex.test(userId)) {
+    throw new RestroomPinServiceError(
+      "UNAUTHENTICATED",
+      "로그인이 필요한 서비스입니다.",
+      401
+    );
+  }
+
+  if (!isServiceRoleConfigured()) {
+    throw new RestroomPinServiceError(
+      "CONFIG_REQUIRED",
+      "서버 DB 보안 서비스 설정이 필요합니다.",
+      503
+    );
+  }
+
+  const adminClient = createAdminClient() as any;
+
+  // 1. Verify active profile status
+  const { data: profile, error: profileError } = await adminClient
+    .from("profiles")
+    .select("id, account_status")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (profileError || !profile) {
+    throw new RestroomPinServiceError(
+      "USER_NOT_FOUND",
+      "사용자 프로필을 찾을 수 없습니다.",
+      404
+    );
+  }
+
+  if (profile.account_status !== "active") {
+    await recordMerchantPinAudit(adminClient, {
+      userId,
+      restroomId,
+      result: "denied",
+      reason: "merchant_pin_view:account_suspended",
+      requestId,
+    });
+    throw new RestroomPinServiceError(
+      "ACCOUNT_SUSPENDED",
+      "정지되었거나 비활성 상태인 계정은 도어락 비밀번호를 조회할 수 없습니다.",
+      403
+    );
+  }
+
+  // 2. Verify restroom exists, is partner, and uses PIN
+  const { data: restroom, error: restroomError } = await adminClient
+    .from("restrooms")
+    .select("id, business_id, type, access_method")
+    .eq("id", restroomId)
+    .maybeSingle();
+
+  if (restroomError || !restroom) {
+    throw new RestroomPinServiceError(
+      "RESTROOM_NOT_FOUND",
+      "화장실을 찾을 수 없습니다.",
+      404
+    );
+  }
+
+  if (restroom.type !== "partner" || !restroom.business_id) {
+    await recordMerchantPinAudit(adminClient, {
+      userId,
+      restroomId,
+      result: "denied",
+      reason: "merchant_pin_view:non_partner_restroom",
+      requestId,
+    });
+    throw new RestroomPinServiceError(
+      "FORBIDDEN_PUBLIC_RESTROOM",
+      "공공 화장실 또는 제휴되지 않은 화장실은 도어락 비밀번호를 조회할 수 없습니다.",
+      403
+    );
+  }
+
+  if (restroom.access_method !== "pin") {
+    throw new RestroomPinServiceError(
+      "PIN_NOT_ENABLED",
+      "도어락 비밀번호(PIN) 방식을 사용하는 화장실만 조회할 수 있습니다.",
+      409
+    );
+  }
+
+  // 3. Verify owning business is approved
+  const { data: business, error: bizError } = await adminClient
+    .from("businesses")
+    .select("id, registration_status")
+    .eq("id", restroom.business_id)
+    .maybeSingle();
+
+  if (bizError || !business || business.registration_status !== "approved") {
+    await recordMerchantPinAudit(adminClient, {
+      userId,
+      restroomId,
+      result: "denied",
+      reason: "merchant_pin_view:business_not_approved",
+      requestId,
+    });
+    throw new RestroomPinServiceError(
+      "BUSINESS_NOT_APPROVED",
+      "승인된 가게의 화장실만 도어락 비밀번호를 조회할 수 있습니다.",
+      403
+    );
+  }
+
+  // 4. Verify caller is admin or active owner/manager of the owning business
+  const { data: adminRole } = await adminClient
+    .from("user_roles")
+    .select("role")
+    .eq("user_id", userId)
+    .eq("role", "admin")
+    .maybeSingle();
+
+  let callerRole: string | null = adminRole?.role === "admin" ? "admin" : null;
+
+  if (!callerRole) {
+    const { data: membership } = await adminClient
+      .from("business_members")
+      .select("role, membership_status")
+      .eq("business_id", restroom.business_id)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (
+      membership &&
+      membership.membership_status === "active" &&
+      (membership.role === "owner" || membership.role === "manager")
+    ) {
+      callerRole = membership.role;
+    }
+  }
+
+  if (!callerRole) {
+    await recordMerchantPinAudit(adminClient, {
+      userId,
+      restroomId,
+      result: "denied",
+      reason: "merchant_pin_view:membership_required",
+      requestId,
+    });
+    throw new RestroomPinServiceError(
+      "MEMBERSHIP_REQUIRED",
+      "해당 화장실이 속한 승인된 가게의 운영 권한이 없습니다.",
+      403
+    );
+  }
+
+  // 5. Retrieve active encrypted secret via service_role
+  const { data: secret, error: secretError } = await adminClient
+    .from("restroom_lock_secrets")
+    .select("id, ciphertext_b64, iv_b64, auth_tag_b64, key_version, code_version, valid_from")
+    .eq("restroom_id", restroomId)
+    .eq("status", "active")
+    .maybeSingle();
+
+  if (secretError) {
+    throw new RestroomPinServiceError(
+      "PIN_LOOKUP_FAILED",
+      "도어락 비밀번호 정보를 확인하지 못했습니다.",
+      500
+    );
+  }
+
+  if (!secret) {
+    throw new RestroomPinServiceError(
+      "PIN_NOT_REGISTERED",
+      "등록된 도어락 비밀번호가 없습니다.",
+      404
+    );
+  }
+
+  // 6. Decrypt strictly in server memory
+  let plainPin: string;
+  try {
+    plainPin = decryptPin({
+      ciphertext_b64: secret.ciphertext_b64,
+      iv_b64: secret.iv_b64,
+      auth_tag_b64: secret.auth_tag_b64,
+      key_version: secret.key_version ?? 1,
+    });
+  } catch (err: unknown) {
+    await recordMerchantPinAudit(adminClient, {
+      userId,
+      restroomId,
+      secretId: secret.id,
+      codeVersion: secret.code_version,
+      result: "error",
+      reason: "merchant_pin_view:decryption_failed",
+      requestId,
+      role: callerRole,
+    });
+    if (err instanceof PinCryptoError) {
+      throw new RestroomPinServiceError(
+        err.code,
+        err.code === "PIN_KEY_MISSING"
+          ? err.message
+          : "도어락 비밀번호 복호화 검증에 실패했습니다.",
+        err.statusCode
+      );
+    }
+    throw new RestroomPinServiceError(
+      "DECRYPTION_FAILED",
+      "도어락 비밀번호 복호화 검증에 실패했습니다.",
+      500
+    );
+  }
+
+  // 7. Record append-only audit log
+  await recordMerchantPinAudit(adminClient, {
+    userId,
+    restroomId,
+    secretId: secret.id,
+    codeVersion: secret.code_version,
+    result: "success",
+    reason: "merchant_pin_view",
+    requestId,
+    role: callerRole,
+  });
+
+  return {
+    ok: true,
+    pin: plainPin,
+    codeVersion: secret.code_version,
+    updatedAt: secret.valid_from,
+    requestId,
   };
 }

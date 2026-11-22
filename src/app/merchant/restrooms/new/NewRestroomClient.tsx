@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { BusinessSummaryItem } from "@/lib/businesses/types";
+import type { BusinessDetail, BusinessSummaryItem } from "@/lib/businesses/types";
 import RestroomForm from "@/components/restroom/RestroomForm";
 
 interface NewRestroomClientProps {
@@ -16,7 +16,9 @@ export default function NewRestroomClient({
   const router = useRouter();
   const [businesses, setBusinesses] = useState<BusinessSummaryItem[]>([]);
   const [selectedBusinessId, setSelectedBusinessId] = useState<string>(initialBusinessId || "");
+  const [selectedBusinessDetail, setSelectedBusinessDetail] = useState<BusinessDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const fetchApprovedBusinesses = useCallback(async () => {
@@ -46,6 +48,36 @@ export default function NewRestroomClient({
   useEffect(() => {
     fetchApprovedBusinesses();
   }, [fetchApprovedBusinesses]);
+
+  useEffect(() => {
+    if (!selectedBusinessId) {
+      setSelectedBusinessDetail(null);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingDetail(true);
+
+    fetch(`/api/v1/merchant/businesses/${encodeURIComponent(selectedBusinessId)}`, {
+      cache: "no-store",
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        const biz = data?.business || data?.data || null;
+        setSelectedBusinessDetail(biz);
+      })
+      .catch(() => {
+        if (!cancelled) setSelectedBusinessDetail(null);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingDetail(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedBusinessId]);
 
   if (isLoading) {
     return (
@@ -89,7 +121,7 @@ export default function NewRestroomClient({
         <h2 className="text-base font-bold text-slate-900 dark:text-white">
           승인된 가게가 없습니다
         </h2>
-        <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto leading-relaxed">
+        <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto leading-relaxed break-keep">
           화장실을 등록하기 위해서는 먼저 제휴 가게를 등록하고 관리자 승인을 받아야 합니다.
         </p>
         <div className="pt-2">
@@ -105,13 +137,39 @@ export default function NewRestroomClient({
   }
 
   const selectedBusiness = businesses.find((b) => b.id === selectedBusinessId) || businesses[0];
+  const detailMatches =
+    selectedBusinessDetail && selectedBusinessDetail.id === selectedBusiness?.id
+      ? selectedBusinessDetail
+      : null;
+
+  const businessDefaults = selectedBusiness
+    ? {
+        name: detailMatches?.name || selectedBusiness.name,
+        roadAddress: detailMatches?.road_address || selectedBusiness.road_address,
+        addressDetail: detailMatches?.address_detail || "",
+        latitude:
+          detailMatches &&
+          Number.isFinite(detailMatches.latitude) &&
+          !(detailMatches.latitude === 0 && detailMatches.longitude === 0)
+            ? detailMatches.latitude
+            : null,
+        longitude:
+          detailMatches &&
+          Number.isFinite(detailMatches.longitude) &&
+          !(detailMatches.latitude === 0 && detailMatches.longitude === 0)
+            ? detailMatches.longitude
+            : null,
+      }
+    : undefined;
 
   return (
     <div className="flex flex-col gap-4" data-testid="new-restroom-container">
-      {/* 가게 선택 (2개 이상인 경우) */}
       {businesses.length > 1 && (
         <div className="rounded-xl bg-white p-3 shadow-sm border border-slate-200 dark:border-slate-800 dark:bg-slate-900 flex items-center gap-2">
-          <label htmlFor="new-restroom-business-select" className="text-xs font-semibold text-slate-700 dark:text-slate-300 shrink-0">
+          <label
+            htmlFor="new-restroom-business-select"
+            className="text-xs font-semibold text-slate-700 dark:text-slate-300 shrink-0"
+          >
             등록 대상 가게:
           </label>
           <select
@@ -129,20 +187,28 @@ export default function NewRestroomClient({
         </div>
       )}
 
-      {selectedBusiness && (
-        <RestroomForm
-          businessId={selectedBusiness.id}
-          businessName={selectedBusiness.name}
-          mode="create"
-          onSuccess={(saved) => {
-            router.push(`/merchant/restrooms/${saved.id}`);
-          }}
-          onCancel={() => {
-            router.push(`/merchant/restrooms?businessId=${selectedBusiness.id}`);
-          }}
-        />
+      {selectedBusiness && isLoadingDetail && !detailMatches ? (
+        <div className="flex flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white py-12 text-slate-400 dark:border-slate-800 dark:bg-slate-900">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
+          <p className="mt-2.5 text-xs">가게 위치 정보를 불러오는 중...</p>
+        </div>
+      ) : (
+        selectedBusiness && (
+          <RestroomForm
+            key={`${selectedBusiness.id}-${detailMatches ? "loaded" : "summary"}`}
+            businessId={selectedBusiness.id}
+            businessName={selectedBusiness.name}
+            businessDefaults={businessDefaults}
+            mode="create"
+            onSuccess={(saved) => {
+              router.push(`/merchant/restrooms/${saved.id}`);
+            }}
+            onCancel={() => {
+              router.push(`/merchant/restrooms?businessId=${selectedBusiness.id}`);
+            }}
+          />
+        )
       )}
     </div>
   );
 }
-

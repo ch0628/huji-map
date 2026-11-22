@@ -22,7 +22,7 @@ function killProcessTree(pid) {
     } else {
       process.kill(-pid, "SIGKILL");
     }
-  } catch {}
+  } catch { }
 }
 
 async function startNextServer() {
@@ -52,7 +52,7 @@ async function startNextServer() {
         console.log("✓ Next.js server ready at", BASE_URL, `(status: ${res.status})`);
         return server;
       }
-    } catch {}
+    } catch { }
   }
   killProcessTree(server.pid);
   throw new Error("Failed to start Next.js server within 30s");
@@ -227,12 +227,153 @@ async function runTests() {
         { eventName: "payment_button_clicked", rawEventCount: 8, distinctBrowserCount: 7 },
         { eventName: "payment_unavailable_shown", rawEventCount: 10, distinctBrowserCount: 9 },
       ],
+      serviceMetrics: {
+        range: {
+          startsAt: "2026-11-05T00:00:00.000Z",
+          endsAt: "2026-11-18T14:59:59.999Z",
+          includeTest: false,
+        },
+        overview: {
+          visitingBrowsers: 65,
+          mapViews: 45,
+          mapBrowsers: 32,
+          markerClicks: 38,
+          markerClickBrowsers: 28,
+          cardClicks: 30,
+          cardViewBrowsers: 25,
+          detailViews: 15,
+          detailViewBrowsers: 12,
+          directionsClicks: 22,
+          directionsClickBrowsers: 18,
+          paymentButtonsClicked: 8,
+          paymentButtonClicks: 8,
+          paymentButtonClickBrowsers: 7,
+          partnerDetailViews: 6,
+          partnerDetailViewBrowsers: 5,
+          cardToDirectionsExposedBrowsers: 25,
+          cardToDirectionsConvertedBrowsers: 12,
+          cardToDirectionsRatePercent: 48.0,
+          partnerDetailExposedBrowsers: 5,
+          partnerDetailToPaymentBrowsers: 3,
+          partnerDetailToPaymentRatePercent: 60.0,
+          paymentUnavailableShown: 10,
+          paymentOrdersCreated: 5,
+          approvedPayments: 4,
+          testModePayments: 4,
+          issuedTickets: 4,
+          submittedReceipts: 2,
+          approvedReceipts: 1,
+          refundsSucceeded: 1,
+        },
+        byRestroomType: {
+          public: {
+            markerClicks: 22,
+            cardClicks: 18,
+            detailViews: 9,
+            directionsClicks: 14,
+            paymentButtonClicks: 0,
+            cardToDirectionsRatePercent: 50.0,
+          },
+          partner: {
+            markerClicks: 16,
+            cardClicks: 12,
+            detailViews: 6,
+            directionsClicks: 8,
+            paymentButtonClicks: 8,
+            cardToDirectionsRatePercent: 45.0,
+          },
+        },
+        restroomInterestRanking: [
+          {
+            restroomId: "b2222222-2222-4222-8222-222222222222",
+            restroomName: "행궁 안심카페 화장실",
+            restroomType: "partner",
+            markerClicks: 16,
+            cardViews: 12,
+            detailViews: 6,
+            directionsClicks: 8,
+            paymentButtonClicks: 8,
+            totalInterestScore: 34,
+          },
+          {
+            restroomId: "a1111111-1111-4111-8111-111111111111",
+            restroomName: "화홍문 공중화장실",
+            restroomType: "public",
+            markerClicks: 22,
+            cardViews: 18,
+            detailViews: 9,
+            directionsClicks: 14,
+            paymentButtonClicks: 0,
+            totalInterestScore: 49,
+          },
+        ],
+        directionsRanking: [
+          {
+            restroomId: "a1111111-1111-4111-8111-111111111111",
+            restroomName: "화홍문 공중화장실",
+            restroomType: "public",
+            markerClicks: 22,
+            cardViews: 18,
+            detailViews: 9,
+            directionsClicks: 14,
+            paymentButtonClicks: 0,
+            totalInterestScore: 49,
+          },
+          {
+            restroomId: "b2222222-2222-4222-8222-222222222222",
+            restroomName: "행궁 안심카페 화장실",
+            restroomType: "partner",
+            markerClicks: 16,
+            cardViews: 12,
+            detailViews: 6,
+            directionsClicks: 8,
+            paymentButtonClicks: 8,
+            totalInterestScore: 34,
+          },
+        ],
+        dailyTrend: [
+          {
+            date: "2026-11-17",
+            visitingBrowsers: 30,
+            mapViews: 20,
+            cardClicks: 14,
+            detailViews: 7,
+            directionsClicks: 10,
+            approvedPayments: 2,
+            submittedReceipts: 1,
+            refundsSucceeded: 0,
+          },
+          {
+            date: "2026-11-18",
+            visitingBrowsers: 35,
+            mapViews: 25,
+            cardClicks: 16,
+            detailViews: 8,
+            directionsClicks: 12,
+            approvedPayments: 2,
+            submittedReceipts: 1,
+            refundsSucceeded: 1,
+          },
+        ],
+        analyticsConfig: {
+          nextPublicAnalyticsEnabledEnv: "false",
+          clientTrackingEffective: true,
+          note: "클라이언트 추적 활성화 점검용",
+          trackedEvents: ["map_loaded", "restroom_marker_clicked", "restroom_card_viewed", "restroom_detail_opened", "directions_clicked"],
+          untrackedFlows: ["login UI", "doorlock PIN UI (pin_reveal_audits 테이블 별도 기록)"],
+        },
+      },
       generatedAt: new Date().toISOString(),
     };
 
     let emptyStateMock = false;
+    const capturedAuthFilters = [];
 
     await page.route("**/api/v1/admin/analytics/pmf*", async (route) => {
+      const urlObj = new URL(route.request().url());
+      const authFilterParam = urlObj.searchParams.get("authFilter") || "all";
+      capturedAuthFilters.push(authFilterParam);
+
       if (emptyStateMock) {
         await route.fulfill({
           status: 200,
@@ -255,11 +396,122 @@ async function runTests() {
                 h5: { ...mockReportData.hypotheses.h5, denominatorCount: 0, numeratorCount: 0, conversionRatePercent: 0, isSufficientData: false },
               },
               eventBreakdown: mockReportData.eventBreakdown.map((e) => ({ ...e, rawEventCount: 0, distinctBrowserCount: 0 })),
+              serviceMetrics: {
+                ...mockReportData.serviceMetrics,
+                overview: {
+                  visitingBrowsers: 0,
+                  mapViews: 0,
+                  mapBrowsers: 0,
+                  markerClicks: 0,
+                  markerClickBrowsers: 0,
+                  cardClicks: 0,
+                  cardViewBrowsers: 0,
+                  detailViews: 0,
+                  detailViewBrowsers: 0,
+                  directionsClicks: 0,
+                  directionsClickBrowsers: 0,
+                  paymentButtonsClicked: 0,
+                  paymentButtonClicks: 0,
+                  paymentButtonClickBrowsers: 0,
+                  partnerDetailViews: 0,
+                  partnerDetailViewBrowsers: 0,
+                  cardToDirectionsExposedBrowsers: 0,
+                  cardToDirectionsConvertedBrowsers: 0,
+                  cardToDirectionsRatePercent: null,
+                  partnerDetailExposedBrowsers: 0,
+                  partnerDetailToPaymentBrowsers: 0,
+                  partnerDetailToPaymentRatePercent: null,
+                  paymentUnavailableShown: 0,
+                  paymentOrdersCreated: 0,
+                  approvedPayments: 0,
+                  testModePayments: 0,
+                  issuedTickets: 0,
+                  submittedReceipts: 0,
+                  approvedReceipts: 0,
+                  refundsSucceeded: 0,
+                },
+                byRestroomType: {
+                  public: {
+                    markerClicks: 0,
+                    cardClicks: 0,
+                    detailViews: 0,
+                    directionsClicks: 0,
+                    paymentButtonClicks: 0,
+                    cardToDirectionsRatePercent: null,
+                  },
+                  partner: {
+                    markerClicks: 0,
+                    cardClicks: 0,
+                    detailViews: 0,
+                    directionsClicks: 0,
+                    paymentButtonClicks: 0,
+                    cardToDirectionsRatePercent: null,
+                  },
+                },
+                restroomInterestRanking: [],
+                directionsRanking: [],
+                dailyTrend: [],
+              },
             },
           }),
         });
         return;
       }
+
+      const filteredData =
+        authFilterParam === "guest"
+          ? {
+              ...mockReportData,
+              serviceMetrics: {
+                ...mockReportData.serviceMetrics,
+                authFilter: "guest",
+                authSplit: {
+                  guestEvents: 90,
+                  authenticatedEvents: 52,
+                  guestBrowsers: 45,
+                  authenticatedBrowsers: 20,
+                },
+                overview: {
+                  ...mockReportData.serviceMetrics.overview,
+                  visitingBrowsers: 45,
+                  mapBrowsers: 22,
+                  mapViews: 30,
+                },
+              },
+            }
+          : authFilterParam === "authenticated"
+          ? {
+              ...mockReportData,
+              serviceMetrics: {
+                ...mockReportData.serviceMetrics,
+                authFilter: "authenticated",
+                authSplit: {
+                  guestEvents: 90,
+                  authenticatedEvents: 52,
+                  guestBrowsers: 45,
+                  authenticatedBrowsers: 20,
+                },
+                overview: {
+                  ...mockReportData.serviceMetrics.overview,
+                  visitingBrowsers: 20,
+                  mapBrowsers: 10,
+                  mapViews: 15,
+                },
+              },
+            }
+          : {
+              ...mockReportData,
+              serviceMetrics: {
+                ...mockReportData.serviceMetrics,
+                authFilter: "all",
+                authSplit: {
+                  guestEvents: 90,
+                  authenticatedEvents: 52,
+                  guestBrowsers: 45,
+                  authenticatedBrowsers: 20,
+                },
+              },
+            };
 
       await route.fulfill({
         status: 200,
@@ -267,7 +519,7 @@ async function runTests() {
         body: JSON.stringify({
           ok: true,
           success: true,
-          data: mockReportData,
+          data: filteredData,
         }),
       });
     });
@@ -277,50 +529,67 @@ async function runTests() {
 
     const dashboardContainer = page.locator('[data-testid="pmf-dashboard-container"]');
     await dashboardContainer.waitFor({ state: "visible", timeout: 5000 });
-    console.log("✓ Admin PMF Dashboard container is visible");
+    console.log("✓ Admin Service Analytics Dashboard container is visible");
 
-    // 1. Check rulesComplete = false Warning Banner
-    const warningBanner = page.locator('[data-testid="pmf-provisional-warning-banner"]');
-    await warningBanner.waitFor({ state: "visible" });
-    const bannerText = await warningBanner.innerText();
-    if (!bannerText.includes("rulesComplete = false") || !bannerText.includes("판정 보류")) {
-      throw new Error("Provisional warning banner missing rulesComplete=false or 판정 보류 status");
+    for (const tid of ["section-scale", "section-interest", "section-intent", "section-server-records"]) {
+      await page.locator(`[data-testid="${tid}"]`).waitFor({ state: "visible", timeout: 5000 });
     }
-    console.log("✓ Provisional notice banner rendered prominently with rulesComplete=false");
 
-    // 2. Check H1, H2, H5 Cards
-    const cardH1 = page.locator('[data-testid="hypothesis-card-h1"]');
-    await cardH1.waitFor({ state: "visible" });
-    const h1Text = await cardH1.innerText();
-    if (!h1Text.includes("H1. 점주 제휴 전환") || !h1Text.includes("6 / 50곳")) {
-      throw new Error(`Card H1 text mismatch: ${h1Text}`);
+    const browsersMetric = await page.locator('[data-testid="metric-visiting-browsers"]').innerText();
+    if (!browsersMetric.includes("65")) {
+      throw new Error(`Visiting browsers mismatch: ${browsersMetric}`);
     }
-    console.log("✓ Card H1 rendered correctly (6 / 50곳 접촉, 12%)");
-
-    const cardH2 = page.locator('[data-testid="hypothesis-card-h2"]');
-    await cardH2.waitFor({ state: "visible" });
-    const h2Exclusions = page.locator('[data-testid="hypothesis-h2-exclusions"]');
-    const h2ExText = await h2Exclusions.innerText();
-    if (!h2ExText.includes("자연 유입(비광고) 제외: 24명") || !h2ExText.includes("비여행자 제외: 15명")) {
-      throw new Error(`Card H2 exclusions text mismatch: ${h2ExText}`);
+    const conversionMetric = await page.locator('[data-testid="metric-card-to-directions-rate"]').innerText();
+    if (!conversionMetric.includes("48.0%")) {
+      throw new Error(`Sequential conversion rate mismatch: ${conversionMetric}`);
     }
-    console.log("✓ Card H2 rendered correctly with exclusions breakdown");
-
-    const cardH5 = page.locator('[data-testid="hypothesis-card-h5"]');
-    await cardH5.waitFor({ state: "visible" });
-    const h5Exclusions = page.locator('[data-testid="hypothesis-h5-exclusions"]');
-    const h5ExText = await h5Exclusions.innerText();
-    if (!h5ExText.includes("공공 화장실 길찾기 제외: 18건") || !h5ExText.includes("타 제휴 화장실 길찾기 제외: 4건")) {
-      throw new Error(`Card H5 exclusions text mismatch: ${h5ExText}`);
+    const paymentsMetric = await page.locator('[data-testid="metric-payments-and-refunds"]').innerText();
+    if (!paymentsMetric.includes("4") || !paymentsMetric.includes("2·1")) {
+      throw new Error(`Payments/refunds metric mismatch: ${paymentsMetric}`);
     }
-    console.log("✓ Card H5 rendered correctly with exclusions breakdown");
+    console.log("✓ Real DB metrics (Sections A-D, sequential rates, browsers, payments/refunds) verified");
 
-    // 3. Check Event Breakdown Table
-    const breakdownTable = page.locator('[data-testid="pmf-event-breakdown-table"]');
-    await breakdownTable.waitFor({ state: "visible" });
-    console.log("✓ Event breakdown table rendered");
+    // Step 3-B: Guest / Authenticated / All filter controls
+    await page.click('[data-testid="analytics-auth-filter-guest"]');
+    await page.waitForTimeout(300);
+    const guestBrowsersText = await page.locator('[data-testid="metric-visiting-browsers"]').innerText();
+    if (!guestBrowsersText.includes("45")) {
+      throw new Error(`Guest filter visiting browsers mismatch: ${guestBrowsersText}`);
+    }
+    const activeFilterNotice = await page.locator('[data-testid="analytics-auth-filter-active-notice"]').innerText();
+    if (!activeFilterNotice.includes("비로그인")) {
+      throw new Error(`Active filter notice mismatch: ${activeFilterNotice}`);
+    }
+    const serverNoticeText = await page.locator('[data-testid="server-records-filter-notice"]').innerText();
+    if (!serverNoticeText.includes("미적용")) {
+      throw new Error(`Section D server filter independence notice missing: ${serverNoticeText}`);
+    }
 
-    await checkNoHorizontalOverflow("Step 3 Admin Dashboard");
+    await page.click('[data-testid="analytics-auth-filter-authenticated"]');
+    await page.waitForTimeout(300);
+    const authedBrowsersText = await page.locator('[data-testid="metric-visiting-browsers"]').innerText();
+    if (!authedBrowsersText.includes("20")) {
+      throw new Error(`Authenticated filter visiting browsers mismatch: ${authedBrowsersText}`);
+    }
+
+    await page.click('[data-testid="analytics-auth-filter-all"]');
+    await page.waitForTimeout(300);
+    if (!capturedAuthFilters.includes("guest") || !capturedAuthFilters.includes("authenticated")) {
+      throw new Error(`Expected guest & authenticated API requests, got: ${JSON.stringify(capturedAuthFilters)}`);
+    }
+    console.log("✓ 전체/비로그인/로그인 filter switching & Section D independence verified");
+
+    await checkNoHorizontalOverflow("Step 3 Admin Dashboard (360px)");
+
+    // Check 390px and 1280px responsive viewports too
+    await page.setViewportSize({ width: 390, height: 844 });
+    const overflow390 = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+    if (overflow390) throw new Error("Horizontal overflow detected at 390px");
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const overflow1280 = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+    if (overflow1280) throw new Error("Horizontal overflow detected at 1280px");
+    await page.setViewportSize({ width: 360, height: 740 });
+    console.log("✓ 390px and 1280px viewports verified (no overflow)");
 
     // Screenshot capture
     const screenshotPath = path.join(SCREENSHOT_DIR, "task19_pmf_dashboard_mobile.png");
@@ -328,22 +597,26 @@ async function runTests() {
     console.log(`✓ Screenshot captured: ${screenshotPath}`);
 
     // =========================================================================
-    // Step 4: 0건 데이터 처리 (Empty state)
+    // Step 4: 0건 데이터 처리 (Empty state & 데이터 부족)
     // =========================================================================
     console.log("\n>>> Step 4: Testing 0-event empty state handling...");
     emptyStateMock = true;
 
-    const refreshBtn = page.locator('[data-testid="pmf-refresh-btn"]');
+    const refreshBtn = page.locator('[data-testid="analytics-refresh-btn"]');
     await refreshBtn.click();
     await page.waitForTimeout(600);
 
-    const emptyNotice = page.locator('[data-testid="pmf-empty-state"]');
+    const emptyNotice = page.locator('[data-testid="daily-trend-empty"]');
     await emptyNotice.waitFor({ state: "visible", timeout: 5000 });
     const emptyText = await emptyNotice.innerText();
-    if (!emptyText.includes("수집된 실험 데이터가 없습니다")) {
+    if (!emptyText.includes("데이터 부족") || !emptyText.includes("기록된 이용 이벤트나 거래 내역이 없습니다")) {
       throw new Error(`Empty state text mismatch: ${emptyText}`);
     }
-    console.log("✓ 0-data empty state banner rendered gracefully");
+    const emptyConversion = await page.locator('[data-testid="metric-card-to-directions-rate"]').innerText();
+    if (!emptyConversion.includes("데이터 부족")) {
+      throw new Error(`Expected '데이터 부족' on zero denominator rate, got: ${emptyConversion}`);
+    }
+    console.log("✓ 0-data empty state & '데이터 부족' rendered gracefully");
 
     await checkNoHorizontalOverflow("Step 4 Empty State");
 
@@ -352,7 +625,7 @@ async function runTests() {
     console.log("=======================================================\n");
   } finally {
     if (browser) {
-      await browser.close().catch(() => {});
+      await browser.close().catch(() => { });
     }
     if (server) {
       killProcessTree(server.pid);

@@ -13,10 +13,17 @@
 
 ## Privacy and safety
 
-- Default no tracking of precise live GPS in events. `browser_id` random pseudonym; treat identifiers as potentially personal data; consent/disclosure policy in Korean/English draft subject to review.
+- Optional behavioral analytics consent uses tri-state status (`undecided` | `accepted` | `declined`, default **`undecided`**) and never treats `undecided`, ESC dismissal, or required signup/payment agreements as analytics consent. Consent from an older `PRIVACY_POLICY_VERSION` is invalidated back to `undecided`. A non-identifying UI preference cookie (`hm_consent_pref`, storing only `policyVersion:accepted|declined`) prevents first-visit SSR flash on `/`, `/map`, and `/restrooms/*` for both first-time and returning users without storing tracking IDs.
+- Before explicit acceptance via the full-screen first-visit consent UI (`AnalyticsConsentModalHost` — `휴지맵 시작하기`, 4 plain-Korean accordions + expandable detailed privacy notice) or user-menu `이용 통계 설정` modal (`PrivacySettingsClient` -> `POST /api/v1/privacy/consent` -> `consent_records`), `hm_browser_id` and `visitor_sessions` are NOT created/stored and client event calls are blocked. Also `NEXT_PUBLIC_ANALYTICS_ENABLED === "true"` is required for any optional event/session transmission or `hm_browser_id` creation.
+- Standalone `/privacy` and `/settings/privacy` pages are retired and redirect server-side to `/map?analyticsDetails=1` and `/map?analyticsSettings=1` respectively (old bookmark/link compatibility without separate privacy document pages).
+- Auth boundary & ownership guards: both unauthenticated visitors (`user_id = NULL`) and authenticated users (`user_id != NULL`) may opt in cleanly, separated server-side via `getUser()`. `syncAnalyticsAuthBoundary` rotates `hm_session_id`/`hm_session_token` across login/logout without mutating consent; server rejects writing to anonymous `visitor_sessions` from an authenticated session (`403 SESSION_OWNERSHIP_MISMATCH`), verifies `hm_session_token` when present on anonymous sessions, and enforces `hm_consent_bid` cookie / DB `user_id` ownership on `/api/v1/privacy/consent` (`403 CONSENT_OWNERSHIP_MISMATCH`).
+- Upon decline/withdrawal in `이용 통계 설정`, client removes `hm_browser_id`, `hm_session_id`, `hm_session_token`, expires `hm_session_token` and `hm_consent_bid` cookies, records withdrawal in `consent_records`, and server rejects further ingestion (`403 ANALYTICS_CONSENT_WITHDRAWN`) — while keeping required payment, refund, and security audit logs separate.
+- Notice disclosures (`PRIVACY_POLICY_VERSION = "2026-11-22"`): basic accordions avoid internal DB/API/event identifier names while the expandable `상세 개인정보 처리 안내` inside `개인정보 처리 안내` discloses processing purposes/items (including browser/session pseudonyms, referrer/UTM, device type, guest/authenticated separation), retention/destruction criteria, external processors (Kakao Maps, Toss Payments, cloud DB/hosting), and user rights/withdrawal instructions. Legal review of formal statutory retention schedule and external disclosures remains required prior to public launch.
+- Default no tracking of precise live GPS in events. `browser_id` random pseudonym; treat identifiers as potentially personal data.
 - Photo, proof/registration number, phone and notes admin/merchant only. Return explicit public allowlist.
 - User account deletion and retention periods require policy; do not silently purge financial/refund audit before legal review.
 - Public restroom unknown open status should be shown as '확인되지 않음'; no guarantee location implies access.
+- DB migrations synced at 22/22 including `20261123000000` (rejected receipt resubmission guard) and `20261123010000` (duplicate unchanged restroom policy guard).
 
 ## Ops
 

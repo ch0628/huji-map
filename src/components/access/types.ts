@@ -100,9 +100,17 @@ export interface CustomerAccessListItem {
   eligibleForPinReveal: boolean;
 }
 
+export interface CustomerAccessReceiptSummary {
+  id: string;
+  submissionStatus: string;
+  createdAt: string;
+  reviewReason: string | null;
+}
+
 export interface CustomerAccessDetail extends CustomerAccessListItem {
   policy: AccessPolicySummary | null;
   visitConfirmations: PublicVisitConfirmation[];
+  latestReceipt?: CustomerAccessReceiptSummary | null;
 }
 
 export type PinRevealErrorCategory =

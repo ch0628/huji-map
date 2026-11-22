@@ -1,27 +1,80 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import type { PmfReportData } from "@/lib/analytics/types";
+import type { AnalyticsAuthFilter, PmfReportData } from "@/lib/analytics/types";
 
-const EVENT_NAME_LABELS: Record<string, string> = {
-  landing_view: "랜딩 페이지 조회 (landing_view)",
-  map_loaded: "지도 타일 로드 (map_loaded)",
-  restroom_marker_clicked: "화장실 마커 클릭 (restroom_marker_clicked)",
-  restroom_card_viewed: "화장실 카드 노출 (restroom_card_viewed)",
-  restroom_detail_opened: "화장실 상세 열람 (restroom_detail_opened)",
-  directions_clicked: "길찾기 실행 (directions_clicked)",
-  travel_answer_submitted: "여행 여부 응답 (travel_answer_submitted)",
-  payment_button_clicked: "보증금 결제 버튼 클릭 (payment_button_clicked)",
-  payment_unavailable_shown: "결제 준비 중 안내 노출 (payment_unavailable_shown)",
+const AUTH_FILTER_LABELS: Record<AnalyticsAuthFilter, string> = {
+  all: "전체",
+  guest: "비로그인",
+  authenticated: "로그인",
 };
 
+const EVENT_NAME_LABELS: Record<string, string> = {
+  map_loaded: "지도 로딩 성공 (map_loaded)",
+  restroom_marker_clicked: "화장실 핀 클릭 (restroom_marker_clicked)",
+  restroom_card_viewed: "화장실 카드 노출 (restroom_card_viewed)",
+  restroom_detail_opened: "화장실 상세 조회 (restroom_detail_opened)",
+  directions_clicked: "길찾기 버튼 클릭 (directions_clicked)",
+  payment_button_clicked: "보증금 결제 버튼 클릭 (payment_button_clicked)",
+};
+
+function getKstTodayDateString(): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Seoul",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
+function addDaysToYmd(ymd: string, deltaDays: number): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const utcMs = Date.UTC(y, (m || 1) - 1, (d || 1) + deltaDays);
+  return new Date(utcMs).toISOString().slice(0, 10);
+}
+
+function kstStartToIso(ymd: string): string {
+  return `${ymd}T00:00:00+09:00`;
+}
+
+function kstEndToIso(ymd: string): string {
+  return `${ymd}T23:59:59+09:00`;
+}
+
+function formatRateOrInsufficient(
+  ratePercent: number | null | undefined,
+  num?: number,
+  den?: number
+): string {
+  if (typeof ratePercent === "number" && Number.isFinite(ratePercent)) {
+    return `${ratePercent.toFixed(1)}%`;
+  }
+  if (typeof num === "number" && typeof den === "number" && den > 0) {
+    return `${((num / den) * 100).toFixed(1)}%`;
+  }
+  return "데이터 부족";
+}
+
 export default function PmfDashboardClient() {
+  const todayYmd = getKstTodayDateString();
+  const [startDate, setStartDate] = useState<string>(() => addDaysToYmd(todayYmd, -13));
+  const [endDate, setEndDate] = useState<string>(() => todayYmd);
+  const [includeTest, setIncludeTest] = useState<boolean>(false);
+  const [authFilter, setAuthFilter] = useState<AnalyticsAuthFilter>("all");
+
   const [report, setReport] = useState<PmfReportData | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [experimentKey, setExperimentKey] = useState<string>("pmf_r1");
-  const [includeTest, setIncludeTest] = useState<boolean>(false);
+  const applyPresetDays = (days: number) => {
+    const end = getKstTodayDateString();
+    setStartDate(addDaysToYmd(end, -(days - 1)));
+    setEndDate(end);
+  };
 
   const fetchReport = useCallback(async () => {
     setIsLoading(true);
@@ -29,457 +82,718 @@ export default function PmfDashboardClient() {
 
     try {
       const sp = new URLSearchParams();
-      sp.set("experimentKey", experimentKey);
+      sp.set("experimentKey", "pmf_r1");
+      if (startDate) {
+        sp.set("startsAt", new Date(kstStartToIso(startDate)).toISOString());
+      }
+      if (endDate) {
+        sp.set("endsAt", new Date(kstEndToIso(endDate)).toISOString());
+      }
       if (includeTest) {
         sp.set("includeTest", "true");
       }
+      sp.set("authFilter", authFilter);
 
       const res = await fetch(`/api/v1/admin/analytics/pmf?${sp.toString()}`, {
         method: "GET",
-        headers: {
-          Accept: "application/json",
-        },
+        headers: { Accept: "application/json" },
+        cache: "no-store",
       });
 
-      const body = await res.json();
-      if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.ok) {
         throw new Error(body?.error?.message || `조회 실패 (${res.status})`);
       }
 
       setReport(body.data);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "지표 데이터를 불러올 수 없습니다."
+        err instanceof Error ? err.message : "서비스 이용 지표를 불러오지 못했습니다."
       );
     } finally {
       setIsLoading(false);
     }
-  }, [experimentKey, includeTest]);
+  }, [startDate, endDate, includeTest, authFilter]);
 
   useEffect(() => {
     fetchReport();
   }, [fetchReport]);
 
-  const formatDateKst = (isoString?: string | null) => {
-    if (!isoString) return "-";
-    try {
-      const d = new Date(isoString);
-      return new Intl.DateTimeFormat("ko-KR", {
-        timeZone: "Asia/Seoul",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      }).format(d);
-    } catch {
-      return isoString;
-    }
-  };
+  const metrics = report?.serviceMetrics;
+  const ov = metrics?.overview;
+  const authSplit = metrics?.authSplit;
+  const activeAuthFilter: AnalyticsAuthFilter = metrics?.authFilter ?? authFilter;
+  const byType = metrics?.byRestroomType;
+  const dailyTrend = metrics?.dailyTrend ?? [];
+  const interestRanking = metrics?.restroomInterestRanking ?? [];
+  const directionsRanking = metrics?.directionsRanking ?? [];
+  const cfg = metrics?.analyticsConfig;
 
   return (
     <div
       data-testid="pmf-dashboard-container"
-      className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-3 py-4 sm:px-6"
+      className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-2 py-3 sm:px-4 text-xs"
     >
-      {/* 1. 상단 안내: rulesComplete = false 잠정 집계 경고 배너 */}
+      {/* 1. 데이터 범위 및 신뢰성 고지 */}
       <section
-        data-testid="pmf-provisional-warning-banner"
-        role="alert"
-        className="rounded-2xl border-2 border-amber-400 bg-amber-50 p-4 text-amber-950 shadow-sm dark:border-amber-600 dark:bg-amber-950/60 dark:text-amber-100"
+        data-testid="service-analytics-notice"
+        className="rounded-2xl border border-blue-200 bg-blue-50/70 p-4 text-blue-950 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-100"
       >
-        <div className="flex items-start gap-3">
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-400 text-xs font-black text-amber-950 dark:bg-amber-500">
-            !
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h1 className="text-base font-bold">서비스 이용 분석</h1>
+          <span className="rounded-md bg-white/80 px-2 py-0.5 text-[11px] font-semibold text-blue-800 dark:bg-slate-900 dark:text-blue-200">
+            실제 DB 집계 기준 (KST)
           </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-sm font-bold sm:text-base">
-                PMF 가설 잠정 집계 상태 (rulesComplete = false)
-              </h2>
-              <span className="inline-flex items-center rounded-md bg-amber-200 px-2 py-0.5 text-[11px] font-bold text-amber-900 dark:bg-amber-800 dark:text-amber-200">
-                판정 보류
-              </span>
-            </div>
-            <p className="mt-1 text-xs leading-relaxed text-amber-900/90 dark:text-amber-200/90">
-              판정 원문의 19개 세부 규칙이 시스템에 아직 최종 수록되지 않았습니다.
-              따라서 PMF 최종 PASS/FAIL 판정을 확정하지 않으며, 현재 관찰 기간 내의
-              순수 수집 데이터와 잠정 전환율만 표기합니다.
-            </p>
-          </div>
         </div>
+        <p className="mt-1.5 text-[11px] leading-relaxed opacity-90 break-keep">
+          선택적 행동 분석에 <strong>동의한 브라우저</strong>만 집계되므로 집계된 브라우저 수는
+          전체 서비스 방문자 수와 다를 수 있으며, 기기·브라우저 기준 익명 식별자 수이므로 실제 사람(이용자) 수와도 다릅니다.
+          집계 데이터가 없는 항목은 추정하지 않고 <strong>데이터 부족</strong> 또는 0건으로 표시합니다.
+        </p>
       </section>
 
-      {/* 2. 실험 메타데이터 및 필터 바 */}
-      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                실험 코드:
-              </span>
-              <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-mono font-bold text-slate-800 dark:bg-slate-800 dark:text-slate-200">
-                {report?.experiment.experimentKey ?? experimentKey}
-              </span>
-              <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-bold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-                {report?.experiment.status === "running" ? "관찰 진행 중" : "초안/준비"}
-              </span>
-            </div>
-            <p className="text-xs text-slate-600 dark:text-slate-400">
-              <span className="font-semibold">관찰 기간:</span>{" "}
-              {formatDateKst(report?.observationWindow.startsAt ?? "2026-11-05T00:00:00Z")} ~{" "}
-              {formatDateKst(report?.observationWindow.endsAt ?? "2026-11-18T14:59:59Z")} (KST)
-            </p>
-            <p className="text-[11px] text-slate-500 dark:text-slate-500">
-              적용 규칙 버전: {report?.experiment.rulesVersion ?? "2026-11-04_agreed_metrics"}
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3 pt-2 sm:pt-0">
-            <label className="flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300">
-              <input
-                type="checkbox"
-                checked={includeTest}
-                onChange={(e) => setIncludeTest(e.target.checked)}
-                className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800"
-              />
-              <span>테스트 데이터(is_test) 포함</span>
-            </label>
-
+      {/* 2. 기간 선택 및 필터 */}
+      <section
+        aria-label="조회 기간 및 데이터 필터"
+        className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-3"
+      >
+        <div className="flex flex-wrap items-center gap-1.5">
+          {[
+            { label: "최근 7일", days: 7 },
+            { label: "최근 14일", days: 14 },
+            { label: "최근 30일", days: 30 },
+          ].map((preset) => (
             <button
+              key={preset.days}
               type="button"
-              onClick={fetchReport}
-              disabled={isLoading}
-              data-testid="pmf-refresh-btn"
-              className="flex min-h-[38px] items-center justify-center rounded-xl bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200 active:scale-95 disabled:opacity-50 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+              onClick={() => applyPresetDays(preset.days)}
+              className="min-h-[36px] rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
             >
-              {isLoading ? "새로고침 중..." : "새로고침"}
+              {preset.label}
             </button>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          <div>
+            <label
+              htmlFor="analytics-start-date"
+              className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400"
+            >
+              시작일 (KST)
+            </label>
+            <input
+              id="analytics-start-date"
+              data-testid="analytics-start-date-input"
+              type="date"
+              value={startDate}
+              max={endDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+            />
+          </div>
+          <div>
+            <label
+              htmlFor="analytics-end-date"
+              className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400"
+            >
+              종료일 (KST)
+            </label>
+            <input
+              id="analytics-end-date"
+              data-testid="analytics-end-date-input"
+              type="date"
+              value={endDate}
+              min={startDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+            />
           </div>
         </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+          <label className="inline-flex min-h-[36px] cursor-pointer items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300">
+            <input
+              type="checkbox"
+              data-testid="analytics-include-test-checkbox"
+              checked={includeTest}
+              onChange={(e) => setIncludeTest(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span>테스트/QA 표시 데이터 포함</span>
+          </label>
+
+          <button
+            type="button"
+            data-testid="analytics-refresh-btn"
+            onClick={fetchReport}
+            disabled={isLoading}
+            className="min-h-[40px] rounded-xl bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50 dark:bg-blue-600 dark:hover:bg-blue-700"
+          >
+            {isLoading ? "조회 중..." : "새로고침"}
+          </button>
+        </div>
+
+        {/* 비로그인 / 로그인 구분 필터 (행동 이벤트 전용) */}
+        <div className="border-t border-slate-100 pt-2.5 dark:border-slate-800 space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+              이용자 로그인 구분 (행동 이벤트 A~C 적용)
+            </span>
+            <div
+              role="group"
+              aria-label="이용자 로그인 구분 필터"
+              className="inline-flex rounded-xl border border-slate-200 bg-slate-100 p-0.5 dark:border-slate-700 dark:bg-slate-800"
+            >
+              {(["all", "guest", "authenticated"] as const).map((opt) => {
+                const active = authFilter === opt;
+                return (
+                  <button
+                    key={opt}
+                    type="button"
+                    aria-pressed={active}
+                    data-testid={`analytics-auth-filter-${opt}`}
+                    onClick={() => setAuthFilter(opt)}
+                    className={`min-h-[34px] rounded-lg px-3 py-1 text-[11px] font-semibold transition ${
+                      active
+                        ? "bg-white text-blue-700 shadow-sm dark:bg-slate-900 dark:text-blue-300"
+                        : "text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
+                    }`}
+                  >
+                    {AUTH_FILTER_LABELS[opt]}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          {authSplit && (
+            <p
+              data-testid="analytics-auth-split-summary"
+              className="text-[11px] text-slate-500 dark:text-slate-400"
+            >
+              기간 내 분포: 비로그인 {authSplit.guestEvents.toLocaleString()}회 (
+              {authSplit.guestBrowsers.toLocaleString()}브라우저) · 로그인{" "}
+              {authSplit.authenticatedEvents.toLocaleString()}회 (
+              {authSplit.authenticatedBrowsers.toLocaleString()}브라우저) — 로그인 전후 익명
+              행동을 회원 계정에 자동 결합하지 않습니다.
+            </p>
+          )}
+          {activeAuthFilter !== "all" && (
+            <p
+              data-testid="analytics-auth-filter-active-notice"
+              className="rounded-lg bg-blue-50 px-2.5 py-1.5 text-[11px] font-medium text-blue-900 dark:bg-blue-950/40 dark:text-blue-200"
+            >
+              현재 <strong>{AUTH_FILTER_LABELS[activeAuthFilter]}</strong> 행동 이벤트만 집계
+              중입니다. 아래 D 영역(결제·이용권·영수증·환급) 서버 기록에는 이 필터가 적용되지
+              않습니다.
+            </p>
+          )}
+        </div>
+
+        {report && !includeTest && (
+          <p className="text-[11px] text-amber-700 dark:text-amber-300">
+            * 테스트/QA 표시 이벤트 {report.summary.excludedTestEvents}건, 테스트 세션{" "}
+            {report.summary.excludedTestSessions}건은 기본 통계에서 제외되었습니다.
+          </p>
+        )}
       </section>
 
-      {/* 에러 상태 */}
       {error && (
         <div
           role="alert"
-          className="rounded-2xl border border-rose-300 bg-rose-50 p-4 text-xs font-medium text-rose-800 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-200"
+          data-testid="analytics-error-alert"
+          className="rounded-2xl border border-rose-300 bg-rose-50 p-4 text-xs text-rose-950 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200"
         >
-          {error}
+          <p className="font-bold">⚠️ {error}</p>
         </div>
       )}
 
-      {/* 로딩 상태 */}
-      {isLoading && !report && (
-        <div className="flex min-h-[200px] flex-col items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white p-8 text-center text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-900">
-          <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
-          <p>PMF 실험 지표를 집계하고 있습니다...</p>
+      {/* A. 서비스 이용 규모 */}
+      <section
+        data-testid="section-scale"
+        aria-label="A. 서비스 이용 규모"
+        className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-3"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+            A. 서비스 이용 규모 (동의 브라우저 기준)
+          </h2>
+          <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            실측 건수
+          </span>
         </div>
-      )}
 
-      {/* 3. 핵심 가설 지표 카드 (H1, H2, H5) */}
-      {report && (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          {/* Card H1 */}
-          <div
-            data-testid="hypothesis-card-h1"
-            className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"
-          >
-            <div>
-              <div className="flex items-center justify-between">
-                <span className="rounded bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-800 dark:bg-blue-950 dark:text-blue-300">
-                  {report.hypotheses.h1.hypothesisKey}
-                </span>
-                <span
-                  data-testid="hypothesis-h1-status"
-                  className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
-                    report.hypotheses.h1.isSufficientData
-                      ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-                      : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
-                  }`}
-                >
-                  {report.hypotheses.h1.isSufficientData
-                    ? "잠정 집계 (판정 보류)"
-                    : "모수 부족 (0/50)"}
-                </span>
-              </div>
-
-              <h3 className="mt-2 text-sm font-bold text-slate-900 dark:text-slate-100">
-                {report.hypotheses.h1.name}
-              </h3>
-              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                {report.hypotheses.h1.definition}
-              </p>
-
-              <div className="mt-4">
-                <div className="flex items-baseline justify-between">
-                  <span className="text-2xl font-black text-slate-900 dark:text-white">
-                    {report.hypotheses.h1.numeratorCount}{" "}
-                    <span className="text-xs font-normal text-slate-500">
-                      / {report.hypotheses.h1.denominatorCount}곳 접촉
-                    </span>
-                  </span>
-                  <span className="text-sm font-bold text-blue-600 dark:text-blue-400">
-                    {report.hypotheses.h1.conversionRatePercent}%
-                  </span>
-                </div>
-
-                {/* Progress bar */}
-                <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-                  <div
-                    className="h-full bg-blue-600 transition-all duration-300"
-                    style={{
-                      width: `${Math.min(
-                        100,
-                        (report.hypotheses.h1.numeratorCount /
-                          report.hypotheses.h1.targetNumerator) *
-                          100
-                      )}%`,
-                    }}
-                  />
-                </div>
-                <div className="mt-1 flex justify-between text-[11px] text-slate-400">
-                  <span>현재: {report.hypotheses.h1.numeratorCount}곳 승인</span>
-                  <span>목표: {report.hypotheses.h1.targetNumerator}곳 (10%)</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-4 border-t border-slate-100 pt-3 text-[11px] text-slate-500 dark:border-slate-800 dark:text-slate-400">
-              분모: 연락 시도 1회 이상 고유 리드
-              <br />
-              분자: 정식 검수 완료된 승인 가게
-            </div>
-          </div>
-
-          {/* Card H2 */}
-          <div
-            data-testid="hypothesis-card-h2"
-            className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"
-          >
-            <div>
-              <div className="flex items-center justify-between">
-                <span className="rounded bg-indigo-100 px-2 py-0.5 text-xs font-bold text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300">
-                  {report.hypotheses.h2.hypothesisKey}
-                </span>
-                <span
-                  data-testid="hypothesis-h2-status"
-                  className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
-                    report.hypotheses.h2.isSufficientData
-                      ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-                      : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
-                  }`}
-                >
-                  {report.hypotheses.h2.isSufficientData
-                    ? "잠정 집계 (판정 보류)"
-                    : "모수 부족 (0/50)"}
-                </span>
-              </div>
-
-              <h3 className="mt-2 text-sm font-bold text-slate-900 dark:text-slate-100">
-                {report.hypotheses.h2.name}
-              </h3>
-              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                {report.hypotheses.h2.definition}
-              </p>
-
-              <div className="mt-4">
-                <div className="flex items-baseline justify-between">
-                  <span className="text-2xl font-black text-slate-900 dark:text-white">
-                    {report.hypotheses.h2.numeratorCount}{" "}
-                    <span className="text-xs font-normal text-slate-500">
-                      / {report.hypotheses.h2.denominatorCount}명 대상
-                    </span>
-                  </span>
-                  <span className="text-sm font-bold text-indigo-600 dark:text-indigo-400">
-                    {report.hypotheses.h2.conversionRatePercent}%
-                  </span>
-                </div>
-
-                {/* Progress bar */}
-                <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-                  <div
-                    className="h-full bg-indigo-600 transition-all duration-300"
-                    style={{
-                      width: `${Math.min(
-                        100,
-                        (report.hypotheses.h2.numeratorCount /
-                          report.hypotheses.h2.targetNumerator) *
-                          100
-                      )}%`,
-                    }}
-                  />
-                </div>
-                <div className="mt-1 flex justify-between text-[11px] text-slate-400">
-                  <span>현재: {report.hypotheses.h2.numeratorCount}명 실행</span>
-                  <span>목표: {report.hypotheses.h2.targetNumerator}명 (10%)</span>
-                </div>
-              </div>
-            </div>
-
-            <div
-              data-testid="hypothesis-h2-exclusions"
-              className="mt-4 border-t border-slate-100 pt-3 text-[11px] text-slate-500 dark:border-slate-800 dark:text-slate-400"
+        <div className="grid grid-cols-2 gap-2.5 break-keep">
+          <div className="min-w-0 rounded-xl border border-slate-100 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              방문 브라우저 (익명)
+            </p>
+            <p
+              data-testid="metric-visiting-browsers"
+              className="mt-1 text-xl font-extrabold text-slate-900 dark:text-white"
             >
-              자연 유입(비광고) 제외: {report.hypotheses.h2.excludedOrganicCount}명
-              <br />
-              비여행자 제외: {report.hypotheses.h2.excludedNonTravelingCount}명
-            </div>
+              {(ov?.visitingBrowsers ?? 0).toLocaleString()}
+            </p>
+            <p className="mt-0.5 text-[10px] text-slate-500">
+              지도 로딩 브라우저 {(ov?.mapBrowsers ?? ov?.visitingBrowsers ?? 0).toLocaleString()}개
+            </p>
           </div>
 
-          {/* Card H5 */}
-          <div
-            data-testid="hypothesis-card-h5"
-            className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"
-          >
-            <div>
-              <div className="flex items-center justify-between">
-                <span className="rounded bg-teal-100 px-2 py-0.5 text-xs font-bold text-teal-800 dark:bg-teal-950 dark:text-teal-300">
-                  {report.hypotheses.h5.hypothesisKey}
-                </span>
-                <span
-                  data-testid="hypothesis-h5-status"
-                  className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
-                    report.hypotheses.h5.isSufficientData
-                      ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-                      : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
-                  }`}
-                >
-                  {report.hypotheses.h5.isSufficientData
-                    ? "잠정 집계 (판정 보류)"
-                    : "모수 부족 (0/50)"}
-                </span>
-              </div>
-
-              <h3 className="mt-2 text-sm font-bold text-slate-900 dark:text-slate-100">
-                {report.hypotheses.h5.name}
-              </h3>
-              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                {report.hypotheses.h5.definition}
-              </p>
-
-              <div className="mt-4">
-                <div className="flex items-baseline justify-between">
-                  <span className="text-2xl font-black text-slate-900 dark:text-white">
-                    {report.hypotheses.h5.numeratorCount}{" "}
-                    <span className="text-xs font-normal text-slate-500">
-                      / {report.hypotheses.h5.denominatorCount}명 노출
-                    </span>
-                  </span>
-                  <span className="text-sm font-bold text-teal-600 dark:text-teal-400">
-                    {report.hypotheses.h5.conversionRatePercent}%
-                  </span>
-                </div>
-
-                {/* Progress bar */}
-                <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-                  <div
-                    className="h-full bg-teal-600 transition-all duration-300"
-                    style={{
-                      width: `${Math.min(
-                        100,
-                        (report.hypotheses.h5.numeratorCount /
-                          report.hypotheses.h5.targetNumerator) *
-                          100
-                      )}%`,
-                    }}
-                  />
-                </div>
-                <div className="mt-1 flex justify-between text-[11px] text-slate-400">
-                  <span>현재: {report.hypotheses.h5.numeratorCount}명 실행</span>
-                  <span>목표: {report.hypotheses.h5.targetNumerator}명 (10%)</span>
-                </div>
-              </div>
-            </div>
-
-            <div
-              data-testid="hypothesis-h5-exclusions"
-              className="mt-4 border-t border-slate-100 pt-3 text-[11px] text-slate-500 dark:border-slate-800 dark:text-slate-400"
+          <div className="min-w-0 rounded-xl border border-slate-100 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              지도 로딩 · 카드 노출
+            </p>
+            <p
+              data-testid="metric-map-and-cards"
+              className="mt-1 text-xl font-extrabold text-slate-900 dark:text-white"
             >
-              공공 화장실 길찾기 제외: {report.hypotheses.h5.excludedPublicDirectionsCount}건
-              <br />
-              타 제휴 화장실 길찾기 제외: {report.hypotheses.h5.excludedMismatchedPartnerDirectionsCount}건
-            </div>
+              {(ov?.mapViews ?? 0).toLocaleString()}
+              <span className="ml-1 text-xs font-semibold text-slate-500">
+                / {(ov?.cardClicks ?? 0).toLocaleString()}
+              </span>
+            </p>
+            <p className="mt-0.5 text-[10px] text-slate-500">
+              분석 동의 및 플래그 활성 시만 수집
+            </p>
           </div>
         </div>
-      )}
+      </section>
 
-      {/* 4. 데이터 0건 안내 (Empty State) */}
-      {report && report.summary.totalEvents === 0 && (
-        <div
-          data-testid="pmf-empty-state"
-          className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center dark:border-slate-700 dark:bg-slate-900/50"
-        >
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-200 text-xl text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-            📊
+      {/* B. 화장실 관심도 */}
+      <section
+        data-testid="section-interest"
+        aria-label="B. 화장실 관심도"
+        className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-3 break-keep"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+            B. 화장실 관심도
+          </h2>
+          <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            횟수 / 고유 브라우저 구분
+          </span>
+        </div>
+
+        <dl className="grid grid-cols-3 gap-2 text-xs">
+          <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/50">
+            <dt className="text-[11px] text-slate-500">핀 클릭</dt>
+            <dd
+              data-testid="metric-marker-clicks"
+              className="mt-1 text-base font-extrabold text-slate-900 dark:text-white"
+            >
+              {(ov?.markerClicks ?? 0).toLocaleString()}회
+            </dd>
+            <dd className="mt-0.5 text-[10px] text-slate-500">
+              브라우저 {(ov?.markerClickBrowsers ?? 0).toLocaleString()}개
+            </dd>
           </div>
-          <h4 className="mt-3 text-sm font-bold text-slate-800 dark:text-slate-200">
-            수집된 실험 데이터가 없습니다
-          </h4>
-          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            실험 관찰 기간 동안 방문자 트래픽이 유입되거나 제휴 활동이 기록되면
-            자동으로 집계됩니다.
+          <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/50">
+            <dt className="text-[11px] text-slate-500">카드 실제 노출</dt>
+            <dd
+              data-testid="metric-card-views"
+              className="mt-1 text-base font-extrabold text-slate-900 dark:text-white"
+            >
+              {(ov?.cardClicks ?? 0).toLocaleString()}회
+            </dd>
+            <dd className="mt-0.5 text-[10px] text-slate-500">
+              브라우저 {(ov?.cardViewBrowsers ?? 0).toLocaleString()}개
+            </dd>
+          </div>
+          <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/50">
+            <dt className="text-[11px] text-slate-500">상세 조회</dt>
+            <dd
+              data-testid="metric-detail-views"
+              className="mt-1 text-base font-extrabold text-slate-900 dark:text-white"
+            >
+              {(ov?.detailViews ?? 0).toLocaleString()}회
+            </dd>
+            <dd className="mt-0.5 text-[10px] text-slate-500">
+              브라우저 {(ov?.detailViewBrowsers ?? 0).toLocaleString()}개
+            </dd>
+          </div>
+        </dl>
+
+        {/* 공공 vs 제휴 비교 */}
+        <div className="space-y-2">
+          <h3 className="text-xs font-bold text-slate-700 dark:text-slate-300">
+            공공 · 제휴 화장실 비교
+          </h3>
+          <dl className="space-y-2 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-blue-50/70 px-3 py-2.5 dark:bg-blue-950/30">
+              <dt className="shrink-0 whitespace-nowrap font-semibold text-blue-900 dark:text-blue-200">
+                🏛️ 무료 공공
+              </dt>
+              <dd className="font-bold text-blue-950 dark:text-blue-100">
+                핀 {byType?.public.markerClicks ?? 0} · 카드 {byType?.public.cardClicks ?? 0} · 상세{" "}
+                {byType?.public.detailViews ?? 0} · 길찾기 {byType?.public.directionsClicks ?? 0}
+              </dd>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-purple-50/70 px-3 py-2.5 dark:bg-purple-950/30">
+              <dt className="shrink-0 whitespace-nowrap font-semibold text-purple-900 dark:text-purple-200">
+                🤝 안심 제휴
+              </dt>
+              <dd className="font-bold text-purple-950 dark:text-purple-100">
+                핀 {byType?.partner.markerClicks ?? 0} · 카드 {byType?.partner.cardClicks ?? 0} · 상세{" "}
+                {byType?.partner.detailViews ?? 0} · 길찾기 {byType?.partner.directionsClicks ?? 0} · 결제버튼{" "}
+                {byType?.partner.paymentButtonClicks ?? 0}
+              </dd>
+            </div>
+          </dl>
+        </div>
+
+        {/* 화장실별 관심도 */}
+        <div className="space-y-2" data-testid="restroom-interest-ranking">
+          <h3 className="text-xs font-bold text-slate-700 dark:text-slate-300">
+            화장실별 관심도 (상위 15개)
+          </h3>
+          {interestRanking.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-slate-300 py-4 text-center text-[11px] text-slate-500 dark:border-slate-700">
+              데이터 부족 — 선택한 기간에 화장실별 관심 이벤트가 없습니다.
+            </p>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+              <table className="w-full border-collapse text-left text-[11px]">
+                <thead className="bg-slate-50 text-slate-600 dark:bg-slate-800/70 dark:text-slate-300">
+                  <tr>
+                    <th className="px-2.5 py-2 font-semibold">화장실</th>
+                    <th className="px-2 py-2 font-semibold">구분</th>
+                    <th className="px-2 py-2 text-right font-semibold">핀</th>
+                    <th className="px-2 py-2 text-right font-semibold">카드</th>
+                    <th className="px-2 py-2 text-right font-semibold">상세</th>
+                    <th className="px-2 py-2 text-right font-semibold">길찾기</th>
+                    <th className="px-2 py-2 text-right font-semibold">결제버튼</th>
+                    <th className="px-2.5 py-2 text-right font-semibold">브라우저</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {interestRanking.map((row) => (
+                    <tr key={row.restroomId}>
+                      <td className="max-w-[140px] truncate px-2.5 py-2 font-medium text-slate-900 dark:text-slate-100">
+                        {row.restroomName}
+                      </td>
+                      <td className="whitespace-nowrap px-2 py-2">
+                        {row.restroomType === "partner"
+                          ? "제휴"
+                          : row.restroomType === "public"
+                          ? "공공"
+                          : "-"}
+                      </td>
+                      <td className="px-2 py-2 text-right">{row.markerClicks}</td>
+                      <td className="px-2 py-2 text-right">{row.cardViews}</td>
+                      <td className="px-2 py-2 text-right">{row.detailViews}</td>
+                      <td className="px-2 py-2 text-right font-semibold text-blue-700 dark:text-blue-300">
+                        {row.directionsClicks}
+                      </td>
+                      <td className="px-2 py-2 text-right text-purple-700 dark:text-purple-300">
+                        {row.paymentButtonClicks}
+                      </td>
+                      <td className="px-2.5 py-2 text-right">{row.distinctBrowsers}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* C. 이용 의사 */}
+      <section
+        data-testid="section-intent"
+        aria-label="C. 이용 의사"
+        className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-3 break-keep"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+            C. 이용 의사 (실측 건수 vs 계산된 전환율)
+          </h2>
+          <span className="rounded bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-800 dark:bg-blue-950/60 dark:text-blue-200">
+            동일 화장실·발생 순서 기준
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+          <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+            <p className="text-[11px] text-slate-500">상세 조회 · 길찾기 (실측)</p>
+            <p
+              data-testid="metric-detail-and-directions"
+              className="mt-1 text-xl font-extrabold text-blue-700 dark:text-blue-400"
+            >
+              {(ov?.detailViews ?? 0).toLocaleString()}
+              <span className="ml-1 text-xs font-semibold text-slate-500">
+                / {(ov?.directionsClicks ?? 0).toLocaleString()}
+              </span>
+            </p>
+            <p className="mt-0.5 text-[10px] text-slate-500">
+              길찾기 고유 브라우저 {(ov?.directionsClickBrowsers ?? 0).toLocaleString()}개
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+            <p className="text-[11px] text-slate-500">
+              카드 노출→길찾기 전환율 (계산)
+            </p>
+            <p
+              data-testid="metric-card-to-directions-rate"
+              className="mt-1 text-xl font-extrabold text-slate-900 dark:text-white"
+            >
+              {formatRateOrInsufficient(ov?.cardToDirectionsRatePercent)}
+            </p>
+            <p className="mt-0.5 text-[10px] text-slate-500">
+              노출 브라우저 {ov?.cardToDirectionsExposedBrowsers ?? 0}개 중{" "}
+              {ov?.cardToDirectionsConvertedBrowsers ?? 0}개 동일 화장실 길찾기
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+            <p className="text-[11px] text-slate-500">
+              제휴 상세→결제버튼 비율 (계산)
+            </p>
+            <p
+              data-testid="metric-partner-detail-to-payment-rate"
+              className="mt-1 text-xl font-extrabold text-purple-700 dark:text-purple-400"
+            >
+              {formatRateOrInsufficient(ov?.partnerDetailToPaymentRatePercent)}
+            </p>
+            <p className="mt-0.5 text-[10px] text-slate-500">
+              제휴 상세 브라우저 {ov?.partnerDetailExposedBrowsers ?? 0}개 중{" "}
+              {ov?.partnerDetailToPaymentBrowsers ?? 0}개 결제버튼 클릭 (실결제 아님)
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-2" data-testid="directions-ranking">
+          <h3 className="text-xs font-bold text-slate-700 dark:text-slate-300">
+            화장실별 길찾기 클릭 순위
+          </h3>
+          {directionsRanking.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-slate-300 py-4 text-center text-[11px] text-slate-500 dark:border-slate-700">
+              데이터 부족 — 선택한 기간에 길찾기 클릭 기록이 없습니다.
+            </p>
+          ) : (
+            <ol className="space-y-1.5">
+              {directionsRanking.map((row, idx) => (
+                <li
+                  key={row.restroomId}
+                  className="flex items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2 text-xs dark:bg-slate-800/50"
+                >
+                  <div className="min-w-0 flex-1">
+                    <span className="mr-1.5 font-bold text-slate-500">
+                      {idx + 1}.
+                    </span>
+                    <span className="font-semibold text-slate-900 dark:text-white">
+                      {row.restroomName}
+                    </span>
+                    <span className="ml-1.5 rounded bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-900 dark:text-slate-300">
+                      {row.restroomType === "partner" ? "제휴" : "공공"}
+                    </span>
+                  </div>
+                  <span className="shrink-0 font-bold text-blue-700 dark:text-blue-300">
+                    {row.directionsClicks}회 ({row.distinctBrowsers}브라우저)
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      </section>
+
+      {/* D. 기존 서버 기록 */}
+      <section
+        data-testid="section-server-records"
+        aria-label="D. 기존 서버 기록"
+        className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-3 break-keep"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+            D. 기존 서버 거래 · 이용권 기록 (테스트 모드 기준)
+          </h2>
+          <span
+            data-testid="server-records-filter-notice"
+            className="rounded bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-200"
+          >
+            행동 분석 동의·로그인 필터 미적용 (서버 DB 전체 기준)
+          </span>
+        </div>
+
+        <div className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-800/50">
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+            결제·이용권 / 영수증·환급 요약
+          </p>
+          <p
+            data-testid="metric-payments-and-refunds"
+            className="mt-1 text-xl font-extrabold text-purple-700 dark:text-purple-400"
+          >
+            {(ov?.approvedPayments ?? 0).toLocaleString()}
+            <span className="ml-1 text-xs font-semibold text-slate-500">
+              / {(ov?.submittedReceipts ?? 0).toLocaleString()}·{(ov?.refundsSucceeded ?? 0).toLocaleString()}
+            </span>
+          </p>
+          <p className="mt-0.5 text-[10px] text-amber-700 dark:text-amber-300">
+            테스트 결제 승인 {ov?.testModePayments ?? 0}건 (실제 금전 청구 아님)
           </p>
         </div>
-      )}
 
-      {/* 5. 이벤트별 집계 및 전환 흐름 테이블 */}
-      {report && (
-        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                관찰 이벤트별 집계 현황
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                총 이벤트 수: {report.summary.totalEvents}건 | 고유 브라우저:{" "}
-                {report.summary.distinctBrowsers}명 | 세션:{" "}
-                {report.summary.distinctSessions}건 (제외된 테스트 이벤트:{" "}
-                {report.summary.excludedTestEvents}건)
-              </p>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table
-              data-testid="pmf-event-breakdown-table"
-              className="w-full text-left text-xs"
+        <dl className="grid grid-cols-2 gap-2 text-xs">
+          <div className="rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800/50">
+            <dt className="text-[11px] text-slate-500">테스트 결제 승인 건수</dt>
+            <dd
+              data-testid="metric-test-mode-payments"
+              className="mt-0.5 font-bold text-slate-900 dark:text-white"
             >
-              <thead className="border-b border-slate-200 text-slate-500 dark:border-slate-800 dark:text-slate-400">
+              {(ov?.testModePayments ?? 0).toLocaleString()}건
+            </dd>
+          </div>
+          <div className="rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800/50">
+            <dt className="text-[11px] text-slate-500">이용권 발급 건수</dt>
+            <dd
+              data-testid="metric-issued-tickets"
+              className="mt-0.5 font-bold text-slate-900 dark:text-white"
+            >
+              {(ov?.issuedTickets ?? 0).toLocaleString()}건
+            </dd>
+          </div>
+          <div className="rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800/50">
+            <dt className="text-[11px] text-slate-500">영수증 제출 · 승인</dt>
+            <dd className="mt-0.5 font-bold text-slate-900 dark:text-white">
+              {ov?.submittedReceipts ?? 0} / {ov?.approvedReceipts ?? 0}건
+            </dd>
+          </div>
+          <div className="rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800/50">
+            <dt className="text-[11px] text-slate-500">테스트 환급 완료</dt>
+            <dd className="mt-0.5 font-bold text-emerald-700 dark:text-emerald-400">
+              {ov?.refundsSucceeded ?? 0}건 (승인 대비{" "}
+              {formatRateOrInsufficient(null, ov?.refundsSucceeded ?? 0, ov?.approvedReceipts ?? 0)})
+            </dd>
+          </div>
+        </dl>
+      </section>
+
+      {/* 5. 일자별 추이 테이블 (KST) */}
+      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <h2
+          id="daily-trend-heading"
+          className="text-sm font-bold text-slate-900 dark:text-white mb-3"
+        >
+          일자별 서비스 이용 추이 (KST)
+        </h2>
+
+        {dailyTrend.length === 0 ? (
+          <p
+            data-testid="daily-trend-empty"
+            className="rounded-xl border border-dashed border-slate-300 py-8 text-center text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400"
+          >
+            데이터 부족 — 선택한 기간에 기록된 이용 이벤트나 거래 내역이 없습니다.
+          </p>
+        ) : (
+          <div
+            tabIndex={0}
+            role="region"
+            aria-labelledby="daily-trend-heading"
+            className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800"
+          >
+            <table className="w-full border-collapse text-left text-[11px]">
+              <thead className="bg-slate-50 text-slate-600 dark:bg-slate-800/70 dark:text-slate-300">
                 <tr>
-                  <th className="py-2.5 pr-4 font-semibold">이벤트 구분</th>
-                  <th className="py-2.5 px-4 text-right font-semibold">
-                    총 발생 횟수 (Raw)
+                  <th scope="col" className="whitespace-nowrap px-3 py-2.5 font-semibold">
+                    날짜 (KST)
                   </th>
-                  <th className="py-2.5 pl-4 text-right font-semibold">
-                    고유 브라우저 수 (Unique)
+                  <th scope="col" className="whitespace-nowrap px-3 py-2.5 font-semibold text-right">
+                    지도 브라우저
+                  </th>
+                  <th scope="col" className="whitespace-nowrap px-3 py-2.5 font-semibold text-right">
+                    지도
+                  </th>
+                  <th scope="col" className="whitespace-nowrap px-3 py-2.5 font-semibold text-right">
+                    핀
+                  </th>
+                  <th scope="col" className="whitespace-nowrap px-3 py-2.5 font-semibold text-right">
+                    카드
+                  </th>
+                  <th scope="col" className="whitespace-nowrap px-3 py-2.5 font-semibold text-right">
+                    상세
+                  </th>
+                  <th scope="col" className="whitespace-nowrap px-3 py-2.5 font-semibold text-right">
+                    길찾기
+                  </th>
+                  <th scope="col" className="whitespace-nowrap px-3 py-2.5 font-semibold text-right">
+                    결제버튼
+                  </th>
+                  <th scope="col" className="whitespace-nowrap px-3 py-2.5 font-semibold text-right">
+                    테스트결제
+                  </th>
+                  <th scope="col" className="whitespace-nowrap px-3 py-2.5 font-semibold text-right">
+                    이용권
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800/50">
-                {report.eventBreakdown.map((row) => (
-                  <tr
-                    key={row.eventName}
-                    className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40"
-                  >
-                    <td className="py-2.5 pr-4 font-medium text-slate-800 dark:text-slate-200">
-                      {EVENT_NAME_LABELS[row.eventName] ?? row.eventName}
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {dailyTrend.map((row) => (
+                  <tr key={row.date} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30">
+                    <th
+                      scope="row"
+                      className="whitespace-nowrap px-3 py-2 font-mono font-semibold text-slate-900 dark:text-slate-100"
+                    >
+                      {row.date}
+                    </th>
+                    <td className="whitespace-nowrap px-3 py-2 text-right">
+                      {row.mapBrowsers ?? row.visitingBrowsers}
                     </td>
-                    <td className="py-2.5 px-4 text-right font-mono font-bold text-slate-900 dark:text-slate-100">
-                      {row.rawEventCount.toLocaleString()}
+                    <td className="whitespace-nowrap px-3 py-2 text-right">{row.mapViews}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right">{row.markerClicks ?? 0}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right">{row.cardClicks}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right">{row.detailViews}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right font-semibold text-blue-700 dark:text-blue-300">
+                      {row.directionsClicks}
                     </td>
-                    <td className="py-2.5 pl-4 text-right font-mono text-slate-600 dark:text-slate-400">
-                      {row.distinctBrowserCount.toLocaleString()}
+                    <td className="whitespace-nowrap px-3 py-2 text-right text-purple-700 dark:text-purple-300">
+                      {row.paymentButtonClicks ?? 0}
                     </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right">
+                      {row.testModePayments ?? row.approvedPayments}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right">{row.issuedTickets ?? 0}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </section>
-      )}
+        )}
+      </section>
+
+      {/* 6. 수집 환경 및 이벤트 기록 점검 */}
+      <details
+        data-testid="analytics-config-audit-box"
+        className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"
+      >
+        <summary className="cursor-pointer text-xs font-bold text-slate-800 dark:text-slate-200">
+          이벤트 수집 설정 및 항목별 기록 상태 확인
+        </summary>
+        <div className="mt-3 space-y-2 border-t border-slate-100 pt-3 text-[11px] text-slate-600 dark:border-slate-800 dark:text-slate-400">
+          <p>
+            <strong>NEXT_PUBLIC_ANALYTICS_ENABLED:</strong>{" "}
+            <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono dark:bg-slate-800">
+              {cfg?.nextPublicAnalyticsEnabledEnv ?? "false"}
+            </code>{" "}
+            (<code>true</code>이고 사용자가 첫 방문 팝업 또는 <code>이용 통계 설정</code>에서 명시적으로
+            동의한 경우에만 6개 선택적 행동 이벤트를 전송합니다. 결제·이용권·영수증·환급·보안 감사 기록은 이 설정과 무관하게 서버에 기록됩니다.)
+          </p>
+          <p>
+            <strong>수집 중인 선택적 이벤트 (6종):</strong>{" "}
+            {(report?.eventBreakdown ?? [])
+              .filter((e) => e.rawEventCount > 0)
+              .map(
+                (e) =>
+                  `${EVENT_NAME_LABELS[e.eventName] ?? e.eventName}: ${e.rawEventCount}회 (${e.distinctBrowserCount}브라우저)`
+              )
+              .join(", ") || "기간 내 이벤트 없음"}
+          </p>
+          <p>
+            <strong>미수집 안내:</strong> 로그인 UI 이벤트, 여행 여부 설문(A19), 실시간 GPS 이동 경로,
+            도어락 PIN, 영수증 원문, 결제 비밀정보는 행동 분석 로그에 수집되지 않습니다.
+          </p>
+        </div>
+      </details>
     </div>
   );
 }
-

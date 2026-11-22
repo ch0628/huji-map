@@ -156,22 +156,17 @@ export default function VisitConfirmationForm({
       aria-label="화장실 방문 및 출입 확인"
       className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900"
     >
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <h2 className="text-sm font-bold text-slate-900 dark:text-white">
-          📍 화장실 도착 및 출입 확인 기록
+      <div className="flex items-center justify-between gap-2 mb-1.5">
+        <h2 className="text-sm font-bold text-slate-900 dark:text-white break-keep">
+          📍 방문 확인
         </h2>
-        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-          고객 확인
+        <span className="shrink-0 whitespace-nowrap rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+          선택 입력
         </span>
       </div>
 
-      <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-400 mb-4">
-        현장 도착 후 실제 출입 성공 여부나 불편 사항(문 잠김·비밀번호 불일치 등)을
-        기록할 수 있습니다.{" "}
-        <span className="text-slate-500">
-          (※ 방문 확인 기록은 고객 신고 내역이며, 보증금 환급은 영수증 수동 심사
-          승인 후 별도로 처리됩니다.)
-        </span>
+      <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-400 mb-3 break-keep">
+        도착 후 출입 성공 여부나 이용 중 불편 사항을 남길 수 있어요.
       </p>
 
       {/* 최근 서버 확인 내역 */}

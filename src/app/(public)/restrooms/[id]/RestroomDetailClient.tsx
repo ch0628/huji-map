@@ -1,50 +1,37 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
-import type {
-  PublicRestroomDetail,
-  GenderType,
-  AccessMethod,
-} from "@/lib/restrooms/types";
+import type { PublicRestroomDetail } from "@/lib/restrooms/types";
 import MapDirectionsModal from "@/components/map/MapDirectionsModal";
 import DepositPaymentButton from "@/components/payment/DepositPaymentButton";
+import PinRevealPanel from "@/components/access/PinRevealPanel";
+import type { CustomerAccessDetail } from "@/components/access/types";
 import { PublicRestroomPhotoGallery } from "@/components/restroom/RestroomPhotoManager";
-import { useEventTracker } from "@/lib/events/hooks";
+import {
+  CompactOperatingHours,
+  OperatingStatusBadge,
+  RestroomFacilitiesCard,
+  evaluateOperatingStatus,
+} from "@/components/restroom/restroom-detail-shared";
+import { useVisitorSession, useEventTracker } from "@/lib/events/hooks";
+import {
+  ANALYTICS_CONSENT_CHANGED_EVENT,
+  ANALYTICS_SESSION_RESET_EVENT,
+  isAnalyticsAllowed,
+} from "@/lib/events/client";
 
 export interface RestroomDetailClientProps {
   readonly restroom: PublicRestroomDetail;
   readonly currentUser?: { id: string; email?: string | null; name?: string | null } | null;
+  readonly initialActiveAccess?: CustomerAccessDetail | null;
   readonly customPaymentRequester?: (options: any) => Promise<void>;
 }
-
-const GENDER_LABELS: Record<GenderType, string> = {
-  separate: "남녀 분리 화장실",
-  unisex: "남녀 공용 화장실",
-  male: "남성 전용 화장실",
-  female: "여성 전용 화장실",
-  unknown: "성별 구분 미확인",
-};
-
-const ACCESS_METHOD_LABELS: Record<AccessMethod, string> = {
-  open: "상시 개방 (자유 출입)",
-  ask_staff: "직원 문의 후 출입",
-  pin: "도어락 비밀번호 잠금",
-};
-
-const WEEKDAY_NAMES = [
-  "일요일",
-  "월요일",
-  "화요일",
-  "수요일",
-  "목요일",
-  "금요일",
-  "토요일",
-];
 
 export default function RestroomDetailClient({
   restroom,
   currentUser = null,
+  initialActiveAccess = null,
   customPaymentRequester,
 }: RestroomDetailClientProps) {
   const [showDirections, setShowDirections] = useState<boolean>(false);
@@ -57,7 +44,29 @@ export default function RestroomDetailClient({
     activePolicy.deposit_amount_krw > 0
       ? activePolicy.deposit_amount_krw
       : null;
-  const canPayTestDeposit = isPartner && policyMode === "test_deposit" && depositAmountKrw !== null;
+  const canPayTestDeposit =
+    isPartner && policyMode === "test_deposit" && depositAmountKrw !== null;
+
+  const hasValidActiveAccess = Boolean(
+    isPartner &&
+      restroom.access_method === "pin" &&
+      policyMode === "test_deposit" &&
+      initialActiveAccess &&
+      initialActiveAccess.session.restroom_id === restroom.id &&
+      initialActiveAccess.session.access_method_snapshot === "pin" &&
+      initialActiveAccess.order?.status === "approved" &&
+      !initialActiveAccess.refund &&
+      (initialActiveAccess.effectiveStatus === "authorized" ||
+        initialActiveAccess.effectiveStatus === "code_revealed") &&
+      new Date(initialActiveAccess.session.expires_at).getTime() > Date.now()
+  );
+
+  const operatingStatus = useMemo(
+    () => evaluateOperatingStatus(restroom.hours, restroom.hour_exceptions),
+    [restroom.hours, restroom.hour_exceptions]
+  );
+
+  useVisitorSession({ isAuthenticated: Boolean(currentUser) });
   const { trackDetailOpened, trackDirectionsClicked } = useEventTracker();
 
   useEffect(() => {
@@ -65,39 +74,54 @@ export default function RestroomDetailClient({
       restroom,
       sourceComponent: "direct_url",
     });
+
+    const handleAnalyticsSync = () => {
+      if (isAnalyticsAllowed()) {
+        trackDetailOpened({
+          restroom,
+          sourceComponent: "direct_url",
+        });
+      }
+    };
+
+    window.addEventListener(ANALYTICS_CONSENT_CHANGED_EVENT, handleAnalyticsSync);
+    window.addEventListener(ANALYTICS_SESSION_RESET_EVENT, handleAnalyticsSync);
+    return () => {
+      window.removeEventListener(ANALYTICS_CONSENT_CHANGED_EVENT, handleAnalyticsSync);
+      window.removeEventListener(ANALYTICS_SESSION_RESET_EVENT, handleAnalyticsSync);
+    };
   }, [restroom, trackDetailOpened]);
 
   return (
     <div
       data-testid="public-restroom-detail-view"
-      className="flex flex-col gap-5 pb-10"
+      className="flex flex-col gap-4 pb-10"
     >
       {/* 상단 네비게이션: 지도로 돌아가기 */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center">
         <Link
-          href={`/map`}
+          href="/map"
           data-testid="back-to-map-link"
           className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-slate-100 px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
         >
           <span>←</span>
           <span>지도로 돌아가기</span>
         </Link>
-
-        {restroom.last_verified_at && (
-          <span className="text-[11px] text-slate-400">
-            정보 검증일:{" "}
-            {new Date(restroom.last_verified_at).toLocaleDateString("ko-KR")}
-          </span>
-        )}
       </div>
 
-      {/* 기본 정보 헤더 */}
+      {/* 상단 사진 슬라이더 (공개 승인 사진 0장이면 미표시) */}
+      <PublicRestroomPhotoGallery
+        restroomName={restroom.name}
+        photos={restroom.photos}
+      />
+
+      {/* 1~4. 기본 정보 + 주소/전화번호 + 운영시간 + 길찾기/결제·PIN */}
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <div className="flex items-center gap-2 mb-2">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
           {isPartner ? (
             <span
               data-testid="detail-partner-badge"
-              className="inline-flex items-center rounded-md bg-purple-100 px-2.5 py-1 text-xs font-bold text-purple-800 dark:bg-purple-950/80 dark:text-purple-300"
+              className="inline-flex items-center rounded-md bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-800 dark:bg-slate-800 dark:text-slate-200"
             >
               🤝 안심 제휴 화장실
             </span>
@@ -109,6 +133,7 @@ export default function RestroomDetailClient({
               🏛️ 무료 공공 화장실
             </span>
           )}
+          <OperatingStatusBadge status={operatingStatus} />
         </div>
 
         <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">
@@ -121,14 +146,28 @@ export default function RestroomDetailClient({
           {restroom.floor ? ` (${restroom.floor})` : ""}
         </p>
 
+        {isPartner && restroom.business?.phone && (
+          <p
+            data-testid="detail-partner-phone"
+            className="mt-1 text-xs text-slate-600 dark:text-slate-400"
+          >
+            📞 {restroom.business.phone}
+          </p>
+        )}
+
+        <CompactOperatingHours
+          hours={restroom.hours ?? []}
+          todayText={operatingStatus.todayText}
+        />
+
         {restroom.description && (
-          <p className="mt-3 text-xs leading-relaxed text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl">
+          <p className="mt-3 rounded-xl bg-slate-50 p-3 text-xs leading-relaxed text-slate-700 dark:bg-slate-800/50 dark:text-slate-300">
             {restroom.description}
           </p>
         )}
 
-        {/* 액션 버튼: 길찾기 & 제휴 결제 (유효한 test_deposit 제휴 화장실만 결제 버튼 노출) */}
-        <div className="mt-5 flex flex-col sm:flex-row items-center gap-2.5 pt-4 border-t border-slate-100 dark:border-slate-800">
+        {/* 3~4. 세로 스택 가로 전체 너비 액션 버튼: 길찾기 -> 보증금 결제 또는 비밀번호 확인 */}
+        <div className="mt-4 flex flex-col gap-2.5 border-t border-slate-100 pt-4 dark:border-slate-800">
           <button
             type="button"
             onClick={() => setShowDirections(true)}
@@ -139,243 +178,146 @@ export default function RestroomDetailClient({
             <span>길찾기 (카카오·네이버·구글)</span>
           </button>
 
-          {/* test_deposit 제휴 화장실에만 결제 버튼 제공 (공공/무료/미설정 화장실은 미노출) */}
-          {canPayTestDeposit && (
-            <DepositPaymentButton
-              restroom={restroom}
-              defaultAmount={depositAmountKrw}
-              initialUser={currentUser}
-              customPaymentRequester={customPaymentRequester}
-            />
-          )}
-        </div>
-      </div>
-
-      {/* 이용 조건 및 정책 안내 */}
-      <div
-        data-testid="restroom-policy-section"
-        className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900"
-      >
-        <h2 className="text-sm font-bold text-slate-900 dark:text-white mb-3">
-          📋 이용 조건 및 규정
-        </h2>
-
-        {isPartner ? (
-          policyMode === "free" ? (
-            <div
-              data-testid="partner-free-policy-box"
-              className="rounded-xl bg-emerald-50 p-3.5 text-xs text-emerald-950 dark:bg-emerald-950/40 dark:text-emerald-200 border border-emerald-200/60 dark:border-emerald-900/50"
-            >
-              <p className="font-bold text-sm mb-1">🤝 안심 제휴 무료 이용</p>
-              <p className="leading-relaxed">
-                제휴 매장에서 보증금 없이 무료로 개방하는 화장실입니다. 별도의 결제 없이 이용 안내에 따라 출입하실 수 있습니다.
-              </p>
+          {hasValidActiveAccess && initialActiveAccess ? (
+            <div data-testid="detail-active-access-box" className="mt-1">
+              <PinRevealPanel
+                session={initialActiveAccess.session}
+                restroom={initialActiveAccess.restroom}
+                order={initialActiveAccess.order}
+                refund={initialActiveAccess.refund}
+                compact={true}
+              />
             </div>
-          ) : policyMode === "test_deposit" && depositAmountKrw !== null ? (
-            <div className="space-y-3">
-              <div
-                data-testid="partner-deposit-policy-box"
-                className="rounded-xl bg-purple-50 p-3.5 text-xs text-purple-900 dark:bg-purple-950/40 dark:text-purple-200 border border-purple-200/50 dark:border-purple-900/50"
-              >
-                <p className="font-bold text-sm mb-1">
-                  ⚠️ 제휴 화장실 안심 보증금 제도
+          ) : canPayTestDeposit ? (
+            <>
+              <DepositPaymentButton
+                restroom={restroom}
+                defaultAmount={depositAmountKrw}
+                initialUser={currentUser}
+                customPaymentRequester={customPaymentRequester}
+              />
+              {restroom.access_method === "pin" && (
+                <p
+                  data-testid="detail-pin-after-payment-note"
+                  className="text-center text-xs font-medium text-slate-700 dark:text-slate-300"
+                >
+                  🔐 결제 후 비밀번호 확인 가능
                 </p>
-                <ul className="list-disc pl-4 space-y-1 text-xs">
-                  <li>
-                    <strong>테스트 보증금:</strong>{" "}
-                    {depositAmountKrw.toLocaleString()}원 (실제 결제 아님 / 테스트 모드)
-                  </li>
-                  <li>
-                    <strong>영수증 환급 조건:</strong>{" "}
-                    {activePolicy?.refund_eligible
-                      ? `제휴 매장 실제 이용(구매) 영수증 사진을 제출한 후, 관리자 수동 심사를 거쳐 승인 완료 시에만 보증금 전액이 환급(테스트 결제 취소)됩니다. (OCR 및 자동 환급 없음, 심사 반려 시 미환급)`
-                      : "환급 미대상 정책입니다."}
-                  </li>
-                  {activePolicy?.refund_eligible && (
-                    <li>
-                      <strong>환급 신청 기한:</strong> 이용 시작 후{" "}
-                      {activePolicy.receipt_window_hours ?? 24}시간 이내
-                    </li>
-                  )}
-                  {typeof activePolicy?.min_purchase_krw === "number" &&
-                    activePolicy.min_purchase_krw > 0 && (
-                      <li>
-                        <strong>최소 구매 기준:</strong>{" "}
-                        {activePolicy.min_purchase_krw.toLocaleString()}원 이상 매장 이용 영수증
-                      </li>
-                    )}
-                  <li>
-                    <strong>도어락 비밀번호:</strong> 결제 승인 완료 후에만 안전하게
-                    공개됩니다. (현재 화면에 노출되지 않음)
-                  </li>
-                </ul>
-              </div>
-            </div>
-          ) : policyMode === "real_deposit" ? (
-            <div
-              data-testid="partner-real-deposit-policy-box"
-              className="rounded-xl bg-amber-50 p-3.5 text-xs text-amber-950 dark:bg-amber-950/40 dark:text-amber-200 border border-amber-200/60 dark:border-amber-900/50"
-            >
-              <p className="font-bold text-sm mb-1">⚠️ 실거래 보증금 정책 미지원</p>
-              <p className="leading-relaxed">
-                현재 테스트 환경에서는 실거래 보증금 결제가 비활성화되어 있습니다.
-              </p>
-            </div>
-          ) : (
-            <div
-              data-testid="partner-missing-policy-box"
-              className="rounded-xl bg-slate-50 p-3.5 text-xs text-slate-800 dark:bg-slate-800/60 dark:text-slate-200 border border-slate-200 dark:border-slate-700"
-            >
-              <p className="font-bold text-sm mb-1">📋 이용 정책 확인 필요</p>
-              <p className="leading-relaxed">
-                현재 활성화된 이용 정책 정보가 설정되지 않았습니다. 매장 안내를 확인해 주세요.
-              </p>
-            </div>
-          )
-        ) : (
-          <div className="rounded-xl bg-blue-50 p-3.5 text-xs text-blue-900 dark:bg-blue-950/40 dark:text-blue-200 border border-blue-200/50 dark:border-blue-900/50">
-            <p className="font-bold text-sm mb-1">✨ 무료 공공 화장실</p>
-            <p>
-              누구나 자유롭게 이용할 수 있는 개방 화장실입니다. 별도의
-              보증금이나 회원가입 없이 이용하실 수 있습니다.
-            </p>
-          </div>
-        )}
-
-        {/* 출입 방식 및 안내 */}
-        <div className="mt-4 space-y-2 text-xs">
-          <div className="flex items-center justify-between py-1.5 border-b border-slate-100 dark:border-slate-800">
-            <span className="text-slate-500 dark:text-slate-400">출입 방식</span>
-            <span className="font-semibold text-slate-800 dark:text-slate-200">
-              {ACCESS_METHOD_LABELS[restroom.access_method] || "출입 안내"}
-            </span>
-          </div>
-
-          {restroom.entrance_instructions && (
-            <div className="py-1.5 border-b border-slate-100 dark:border-slate-800">
-              <span className="text-slate-500 dark:text-slate-400 block mb-1">
-                출입구 위치 및 안내
-              </span>
-              <p className="font-medium text-slate-800 dark:text-slate-200 bg-slate-50 dark:bg-slate-800 p-2 rounded-lg">
-                {restroom.entrance_instructions}
-              </p>
-            </div>
-          )}
+              )}
+            </>
+          ) : null}
         </div>
       </div>
 
-      {/* 시설 및 편의 기능 (휠체어 미확인 마커 포함) */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <h2 className="text-sm font-bold text-slate-900 dark:text-white mb-3">
-          ♿ 편의 시설 및 시설 구분
-        </h2>
-
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          <div className="flex items-center justify-between rounded-xl bg-slate-50 p-2.5 dark:bg-slate-800/60">
-            <span className="text-slate-500 dark:text-slate-400">성별 구분</span>
-            <span className="font-semibold text-slate-800 dark:text-slate-200">
-              {GENDER_LABELS[restroom.gender_type] || "미확인"}
-            </span>
-          </div>
-
-          <div className="flex items-center justify-between rounded-xl bg-slate-50 p-2.5 dark:bg-slate-800/60">
-            <span className="text-slate-500 dark:text-slate-400">휠체어 접근</span>
-            {restroom.wheelchair_accessible === true ? (
-              <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                ♿ 이용 가능
-              </span>
-            ) : restroom.wheelchair_accessible === false ? (
-              <span className="font-semibold text-slate-400">이용 불가</span>
-            ) : (
-              <span className="font-semibold text-amber-600 dark:text-amber-400">
-                ❓ 정보 미확인
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-center justify-between rounded-xl bg-slate-50 p-2.5 dark:bg-slate-800/60">
-            <span className="text-slate-500 dark:text-slate-400">기저귀 교환대</span>
-            <span className="font-semibold text-slate-800 dark:text-slate-200">
-              {restroom.baby_changing_available ? "👶 설치됨" : "미설치"}
-            </span>
-          </div>
-
-          <div className="flex items-center justify-between rounded-xl bg-slate-50 p-2.5 dark:bg-slate-800/60">
-            <span className="text-slate-500 dark:text-slate-400">여성위생용품</span>
-            <span className="font-semibold text-slate-800 dark:text-slate-200">
-              {restroom.sanitary_products_available ? "🧴 비치됨" : "미비치"}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* 운영 시간 정보 */}
-      <div
-        data-testid="restroom-hours-section"
-        className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900"
-      >
-        <h2 className="text-sm font-bold text-slate-900 dark:text-white mb-3">
-          🕒 운영 시간
-        </h2>
-
-        {restroom.hours && restroom.hours.length > 0 ? (
-          <div className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
-            {restroom.hours.map((h) => (
-              <div
-                key={h.id || h.weekday}
-                className="flex items-center justify-between py-2"
-              >
-                <span className="font-medium text-slate-600 dark:text-slate-400">
-                  {WEEKDAY_NAMES[h.weekday] || `${h.weekday}요일`}
-                </span>
-                <span className="font-semibold text-slate-900 dark:text-slate-200">
-                  {h.is_closed
-                    ? "휴무"
-                    : h.opens_at && h.closes_at
-                    ? `${h.opens_at.slice(0, 5)} ~ ${
-                        h.crosses_midnight ? "익일 " : ""
-                      }${h.closes_at.slice(0, 5)}`
-                    : "운영시간 정보 없음"}
-                </span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p
-            data-testid="restroom-hours-empty"
-            className="text-xs text-slate-500 dark:text-slate-400"
+      {/* 5. 간단한 보증금/이용 안내 */}
+      {isPartner ? (
+        policyMode === "free" ? (
+          <div
+            data-testid="partner-free-policy-box"
+            className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-900 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-100"
           >
-            운영시간 정보 없음
-          </p>
-        )}
-      </div>
-
-      {/* 제휴 가게 정보 (제휴 화장실인 경우에만 노출) */}
-      {isPartner && restroom.business && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <h2 className="text-sm font-bold text-slate-900 dark:text-white mb-3">
-            🏬 제휴 매장 안내
-          </h2>
-          <div className="space-y-1.5 text-xs text-slate-700 dark:text-slate-300">
-            <p className="font-bold text-sm text-slate-900 dark:text-white">
-              {restroom.business.name}
+            <p className="font-bold text-sm">🤝 안심 제휴 무료 이용</p>
+            <p className="mt-1 leading-relaxed text-slate-700 dark:text-slate-300">
+              제휴 매장에서 보증금 없이 무료로 개방하는 화장실이에요.
             </p>
-            <p className="text-slate-500">
-              업종: {restroom.business.category}
-            </p>
-            <p>위치: {restroom.business.road_address}</p>
-            {restroom.business.phone && (
-              <p>연락처: {restroom.business.phone}</p>
-            )}
           </div>
+        ) : policyMode === "test_deposit" && depositAmountKrw !== null ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 text-xs text-slate-900 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="font-bold text-sm">
+                이용 보증금{" "}
+                <span className="text-base font-extrabold text-purple-700 dark:text-purple-400">
+                  {depositAmountKrw.toLocaleString()}원
+                </span>
+              </p>
+              <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                테스트 결제 · 실제 청구 없음
+              </span>
+            </div>
+            <p className="mt-1.5 leading-relaxed text-slate-700 dark:text-slate-300">
+              결제 후 이용할 수 있어요. 매장에서 구매한 영수증이 승인되면 보증금을 돌려받을 수 있어요.
+            </p>
+          </div>
+        ) : policyMode === "real_deposit" ? (
+          <div
+            data-testid="partner-real-deposit-policy-box"
+            className="rounded-2xl border border-amber-200/70 bg-amber-50 p-4 text-xs text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200"
+          >
+            <p className="font-bold text-sm">⚠️ 실거래 보증금 결제 미지원</p>
+            <p className="mt-1 leading-relaxed">
+              현재 테스트 환경에서는 실거래 보증금 결제가 비활성화되어 있습니다.
+            </p>
+          </div>
+        ) : (
+          <div
+            data-testid="partner-missing-policy-box"
+            className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200"
+          >
+            <p className="font-bold text-sm">📋 이용 정책 확인 필요</p>
+            <p className="mt-1 leading-relaxed">
+              현재 활성화된 이용 정책 정보가 설정되지 않았습니다. 매장 안내를 확인해 주세요.
+            </p>
+          </div>
+        )
+      ) : (
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-900 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-100">
+          <p className="font-bold text-sm">✨ 무료 공공 화장실</p>
+          <p className="mt-1 leading-relaxed text-slate-700 dark:text-slate-300">
+            회원가입이나 보증금 없이 누구나 무료로 이용할 수 있어요.
+          </p>
         </div>
       )}
 
-      {/* 사진 갤러리 (승인된 사진만 표시) */}
-      <PublicRestroomPhotoGallery
-        restroomName={restroom.name}
-        photos={restroom.photos}
-      />
+      {/* 6. 이용 조건 및 상세 규정 (필요한 경우 펼쳐보기) */}
+      {isPartner && policyMode === "test_deposit" && depositAmountKrw !== null && (
+        <details
+          data-testid="restroom-policy-section"
+          className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"
+        >
+          <summary className="flex min-h-[36px] cursor-pointer list-none items-center justify-between gap-2 text-xs font-bold text-slate-800 dark:text-slate-100">
+            <span>이용 조건 및 상세 규정 펼쳐보기</span>
+            <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-400">
+              상세 보기 ▾
+            </span>
+          </summary>
+
+          <div
+            data-testid="partner-deposit-policy-box"
+            className="mt-3 space-y-2 border-t border-slate-100 pt-3 text-xs text-slate-700 dark:border-slate-800 dark:text-slate-300"
+          >
+            <ul className="list-disc space-y-1.5 pl-4 leading-relaxed">
+              <li>
+                <strong>테스트 보증금:</strong> {depositAmountKrw.toLocaleString()}원 (실제 결제 아님 / 테스트 모드)
+              </li>
+              <li>
+                <strong>영수증 환급 조건:</strong>{" "}
+                {activePolicy?.refund_eligible
+                  ? "제휴 매장 실제 이용(구매) 영수증 사진을 제출한 후, 관리자 수동 심사를 거쳐 승인 완료 시에만 보증금 전액이 환급(테스트 결제 취소)됩니다. (OCR 및 자동 환급 없음, 심사 반려 시 미환급)"
+                  : "환급 미대상 정책입니다."}
+              </li>
+              {activePolicy?.refund_eligible && (
+                <li>
+                  <strong>환급 신청 기한:</strong> 이용 시작 후{" "}
+                  {activePolicy.receipt_window_hours ?? 24}시간 이내
+                </li>
+              )}
+              {typeof activePolicy?.min_purchase_krw === "number" &&
+                activePolicy.min_purchase_krw > 0 && (
+                  <li>
+                    <strong>최소 구매 기준:</strong>{" "}
+                    {activePolicy.min_purchase_krw.toLocaleString()}원 이상 매장 이용 영수증
+                  </li>
+                )}
+              <li>
+                <strong>도어락 비밀번호:</strong> 결제 승인 완료 후에만 안전하게 공개됩니다.
+              </li>
+            </ul>
+          </div>
+        </details>
+      )}
+
+      {/* 7. 기타 시설 정보 */}
+      <RestroomFacilitiesCard restroom={restroom} />
 
       {/* 길찾기 모달 */}
       <MapDirectionsModal
@@ -403,4 +345,3 @@ export default function RestroomDetailClient({
     </div>
   );
 }
-

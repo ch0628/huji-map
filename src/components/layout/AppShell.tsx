@@ -2,8 +2,14 @@ import React from "react";
 import { cookies } from "next/headers";
 import Header from "./Header";
 import type { HeaderAuthState } from "./HeaderNavClient";
+import AnalyticsConsentModalHost from "@/components/privacy/AnalyticsConsentModalHost";
 import { getServerAuthSession, isE2eMockSessionAllowed } from "@/lib/auth";
 import type { UserRoleType } from "@/lib/db/types";
+import {
+  CONSENT_PREF_COOKIE_NAME,
+  parseConsentPrefCookie,
+  type AnalyticsConsentStatus,
+} from "@/lib/events/types";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -70,18 +76,38 @@ async function resolveHeaderAuthState(): Promise<HeaderAuthState> {
   return DEFAULT_AUTH_STATE;
 }
 
+async function resolveInitialConsentStatus(): Promise<AnalyticsConsentStatus> {
+  try {
+    const cookieStore = await cookies();
+    return parseConsentPrefCookie(
+      cookieStore.get(CONSENT_PREF_COOKIE_NAME)?.value
+    );
+  } catch {
+    return "undecided";
+  }
+}
+
 export default async function AppShell({
   children,
   headerTitle,
   showNavigation = true,
 }: AppShellProps) {
-  const auth = showNavigation
-    ? await resolveHeaderAuthState()
-    : DEFAULT_AUTH_STATE;
+  const [auth, initialConsentStatus] = showNavigation
+    ? await Promise.all([
+        resolveHeaderAuthState(),
+        resolveInitialConsentStatus(),
+      ])
+    : [DEFAULT_AUTH_STATE, "undecided" as AnalyticsConsentStatus];
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-md flex-col bg-white shadow-sm dark:bg-slate-900">
       <Header title={headerTitle} auth={auth} showNavigation={showNavigation} />
+      {showNavigation && (
+        <AnalyticsConsentModalHost
+          isAuthenticated={auth.authenticated}
+          initialConsentStatus={initialConsentStatus}
+        />
+      )}
       <main className="flex flex-1 flex-col p-4">{children}</main>
     </div>
   );

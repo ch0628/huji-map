@@ -11,6 +11,8 @@ import {
 } from "@/lib/auth/mock-guard";
 import { createServerClientInstance } from "@/lib/supabase/server";
 import { getPublicRestroomDetail } from "@/lib/restrooms";
+import { getLatestActiveCustomerAccessForRestroom } from "@/components/access/access-server";
+import type { CustomerAccessDetail } from "@/components/access/types";
 
 interface RestroomDetailPageProps {
   params: Promise<{ id: string }>;
@@ -55,6 +57,7 @@ export default async function RestroomDetailPage({
 
   let restroom = null;
   let currentUser = null;
+  let activeAccessDetail: CustomerAccessDetail | null = null;
   try {
     const supabase = await createServerClientInstance();
     restroom = await getPublicRestroomDetail(supabase, id);
@@ -175,9 +178,24 @@ export default async function RestroomDetailPage({
     );
   }
 
+  if (currentUser && restroom?.type === "partner") {
+    try {
+      activeAccessDetail = await getLatestActiveCustomerAccessForRestroom({
+        userId: currentUser.id,
+        restroomId: id,
+      });
+    } catch {
+      activeAccessDetail = null;
+    }
+  }
+
   return (
     <AppShell headerTitle={restroom.name}>
-      <RestroomDetailClient restroom={restroom} currentUser={currentUser} />
+      <RestroomDetailClient
+        restroom={restroom}
+        currentUser={currentUser}
+        initialActiveAccess={activeAccessDetail}
+      />
     </AppShell>
   );
 }

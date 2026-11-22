@@ -20,6 +20,7 @@ import {
   getConsentState,
   setConsentState,
   isAnalyticsAllowed,
+  isAnalyticsEnvEnabled,
   getDeviceType,
   useEventTracker,
 } from "@/lib/events";
@@ -34,14 +35,23 @@ describe("TASK 18: Events UI Hooks & User Tracking Telemetry", () => {
   const UUID_REGEX =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+  const originalAnalyticsEnv = process.env.NEXT_PUBLIC_ANALYTICS_ENABLED;
+
   beforeEach(() => {
+    process.env.NEXT_PUBLIC_ANALYTICS_ENABLED = "true";
     window.localStorage.clear();
     window.sessionStorage.clear();
+    setConsentState({ analytics: true });
     setActiveSessionId("00000000-0000-4000-8000-000000000001");
     vi.restoreAllMocks();
   });
 
   afterEach(() => {
+    if (originalAnalyticsEnv === undefined) {
+      delete process.env.NEXT_PUBLIC_ANALYTICS_ENABLED;
+    } else {
+      process.env.NEXT_PUBLIC_ANALYTICS_ENABLED = originalAnalyticsEnv;
+    }
     vi.unstubAllGlobals();
   });
 
@@ -599,23 +609,43 @@ describe("TASK 18: Events UI Hooks & User Tracking Telemetry", () => {
       setConsentState({ analytics: true });
       expect(isAnalyticsAllowed()).toBe(true);
 
-      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+        if (String(url).includes("/api/v1/sessions")) {
+          return {
+            ok: true,
+            status: 201,
+            json: async () => ({
+              ok: true,
+              data: {
+                sessionId: "00000000-0000-4000-8000-000000000099",
+                browserId: getOrCreateBrowserId(),
+                startedAt: new Date().toISOString(),
+                isTest: false,
+              },
+            }),
+          } as Response;
+        }
+        return {
           ok: true,
-          data: {
-            clientEventId: createClientEventId(),
-            receivedAt: new Date().toISOString(),
-            deduplicated: false,
-          },
-        }),
-      } as Response);
-
-      await trackEvent({
-        eventName: "landing_view",
+          json: async () => ({
+            ok: true,
+            data: {
+              clientEventId: createClientEventId(),
+              receivedAt: new Date().toISOString(),
+              deduplicated: false,
+            },
+          }),
+        } as Response;
       });
 
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      await trackEvent({
+        eventName: "map_loaded",
+        properties: { zoom: 4, restroom_count: 1, filter: "all" },
+      });
+
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url).includes("/api/v1/events"))
+      ).toBe(true);
     });
 
     it("이벤트 전송 실패(500, 네트워크 끊김 등) 시 trackEventSafe는 예외를 던지지 않고 null을 반환한다", async () => {
@@ -855,6 +885,45 @@ describe("TASK 18: Events UI Hooks & User Tracking Telemetry", () => {
         expect(payload.properties.restroom_id).toBe("target-restroom-1");
         expect(payload.properties.type).toBe("public");
       });
+    });
+  });
+
+  describe("7. NEXT_PUBLIC_ANALYTICS_ENABLED 환경 플래그 및 동의 차단", () => {
+    it("NEXT_PUBLIC_ANALYTICS_ENABLED=false 또는 미설정이면 동의 상태와 무관하게 이벤트 및 방문 세션을 전송하지 않는다", async () => {
+      window.sessionStorage.clear();
+      setConsentState({ analytics: true });
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+      process.env.NEXT_PUBLIC_ANALYTICS_ENABLED = "false";
+      expect(isAnalyticsEnvEnabled()).toBe(false);
+      expect(isAnalyticsAllowed()).toBe(false);
+
+      const sessionRes = await ensureVisitorSession();
+      expect(sessionRes).toBeNull();
+      await trackEvent({ eventName: "landing_view" });
+      expect(fetchSpy).not.toHaveBeenCalled();
+
+      delete process.env.NEXT_PUBLIC_ANALYTICS_ENABLED;
+      expect(isAnalyticsEnvEnabled()).toBe(false);
+      expect(isAnalyticsAllowed()).toBe(false);
+
+      await ensureVisitorSession();
+      await trackEvent({ eventName: "map_loaded", properties: { zoom: 3, restroom_count: 0, filter: "all" } });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("NEXT_PUBLIC_ANALYTICS_ENABLED=true 여도 사용자 분석 동의 거부(analytics=false)는 절대 우회하지 않는다", async () => {
+      process.env.NEXT_PUBLIC_ANALYTICS_ENABLED = "true";
+      window.sessionStorage.clear();
+      setConsentState({ analytics: false });
+
+      expect(isAnalyticsEnvEnabled()).toBe(true);
+      expect(isAnalyticsAllowed()).toBe(false);
+
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+      expect(await ensureVisitorSession()).toBeNull();
+      await trackEvent({ eventName: "landing_view" });
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 });

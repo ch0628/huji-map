@@ -6,6 +6,53 @@
 import type { DeviceType } from "@/lib/db/types";
 
 /**
+ * Current privacy policy & optional analytics consent version.
+ */
+export const PRIVACY_POLICY_VERSION = "2026-11-22";
+
+/**
+ * Tri-state consent status for optional behavioral analytics.
+ * "undecided" and "declined" both block optional event collection.
+ */
+export type AnalyticsConsentStatus = "undecided" | "accepted" | "declined";
+
+export const CONSENT_PREF_COOKIE_NAME = "hm_consent_pref";
+
+/**
+ * Parses the non-identifying UI preference cookie ("<policyVersion>:accepted|declined")
+ * used solely to prevent first-visit consent screen flicker during SSR.
+ */
+export function parseConsentPrefCookie(
+  rawValue?: string | null
+): AnalyticsConsentStatus {
+  if (!rawValue) return "undecided";
+  const decoded = (() => {
+    try {
+      return decodeURIComponent(rawValue);
+    } catch {
+      return rawValue;
+    }
+  })();
+  if (decoded === `${PRIVACY_POLICY_VERSION}:accepted`) return "accepted";
+  if (decoded === `${PRIVACY_POLICY_VERSION}:declined`) return "declined";
+  return "undecided";
+}
+
+/**
+ * Strictly limited 6 optional behavioral analytics events collected on explicit user consent.
+ */
+export const OPTIONAL_BEHAVIORAL_EVENTS = [
+  "map_loaded",
+  "restroom_marker_clicked",
+  "restroom_card_viewed",
+  "restroom_detail_opened",
+  "directions_clicked",
+  "payment_button_clicked",
+] as const;
+
+export type OptionalBehavioralEventName = (typeof OPTIONAL_BEHAVIORAL_EVENTS)[number];
+
+/**
  * 11 events that clients may emit directly via POST /api/v1/events.
  * travel_answer_submitted is authoritatively emitted by the server via PATCH /api/v1/sessions/:id/travel-answer.
  */
@@ -140,6 +187,7 @@ export interface EventIngestResult {
   receivedAt: string;
   deduplicated: boolean;
   id?: string;
+  isAuthenticated?: boolean;
 }
 
 /**
@@ -159,6 +207,7 @@ export interface CreateSessionInput {
   isTest?: boolean;
   consent?: {
     analytics?: boolean;
+    analyticsStatus?: AnalyticsConsentStatus;
     marketing?: boolean;
     terms?: boolean;
     privacy?: boolean;
@@ -175,6 +224,7 @@ export interface SessionCreateResult {
   sessionToken?: string;
   startedAt: string;
   isTest: boolean;
+  isAuthenticated?: boolean;
 }
 
 /**

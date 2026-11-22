@@ -8,8 +8,10 @@ import {
   requireRole,
 } from "@/lib/auth";
 import { createServerClientInstance } from "@/lib/supabase/server";
+import { checkRateLimit } from "@/lib/events/rate-limiter";
 import {
   setOrRotateRestroomPin,
+  getMerchantRestroomPin,
   computePinHmac,
   RestroomPinServiceError,
   PinCryptoError,
@@ -17,6 +19,152 @@ import {
 
 interface RouteParams {
   params: Promise<{ id: string }>;
+}
+
+const NO_STORE_HEADERS = {
+  "Cache-Control": "private, no-store, no-cache, must-revalidate",
+  Pragma: "no-cache",
+  Expires: "0",
+};
+
+export async function GET(_request: Request, context: RouteParams) {
+  const requestId = crypto.randomUUID();
+  const { id } = await context.params;
+
+  if (!isSupabaseAuthConfigured()) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: {
+          code: "CONFIG_REQUIRED",
+          message: "인증 서비스 설정이 필요합니다.",
+        },
+        requestId,
+      },
+      { status: 503, headers: NO_STORE_HEADERS }
+    );
+  }
+
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!id || !uuidRegex.test(id)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "유효한 화장실 UUID가 아닙니다.",
+        },
+        requestId,
+      },
+      { status: 400, headers: NO_STORE_HEADERS }
+    );
+  }
+
+  try {
+    const supabase = await createServerClientInstance();
+    const session = await requireRole(["merchant", "admin"], supabase);
+
+    const perRestroomLimit = checkRateLimit(
+      `merchant_pin_view:${session.user.id}:${id}`,
+      10,
+      60_000
+    );
+    if (!perRestroomLimit.allowed) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: {
+            code: "TOO_MANY_REQUESTS",
+            message: "비밀번호 조회 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+          },
+          requestId,
+        },
+        {
+          status: 429,
+          headers: {
+            ...NO_STORE_HEADERS,
+            "Retry-After": Math.ceil(perRestroomLimit.resetMs / 1000).toString(),
+          },
+        }
+      );
+    }
+
+    const perUserLimit = checkRateLimit(
+      `merchant_pin_view_user:${session.user.id}`,
+      20,
+      60_000
+    );
+    if (!perUserLimit.allowed) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: {
+            code: "TOO_MANY_REQUESTS",
+            message: "비밀번호 조회 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+          },
+          requestId,
+        },
+        {
+          status: 429,
+          headers: {
+            ...NO_STORE_HEADERS,
+            "Retry-After": Math.ceil(perUserLimit.resetMs / 1000).toString(),
+          },
+        }
+      );
+    }
+
+    const result = await getMerchantRestroomPin({
+      restroomId: id,
+      userId: session.user.id,
+      requestId,
+    });
+
+    return NextResponse.json(result, { status: 200, headers: NO_STORE_HEADERS });
+  } catch (err: unknown) {
+    if (err instanceof AuthGuardError) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: {
+            code: err.code,
+            message: err.userMessage,
+          },
+          requestId,
+        },
+        {
+          status: typeof err.status === "number" ? err.status : 401,
+          headers: NO_STORE_HEADERS,
+        }
+      );
+    }
+
+    if (err instanceof RestroomPinServiceError || err instanceof PinCryptoError) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: {
+            code: err.code,
+            message: err.message,
+          },
+          requestId,
+        },
+        { status: err.statusCode, headers: NO_STORE_HEADERS }
+      );
+    }
+
+    return NextResponse.json(
+      {
+        ok: false,
+        error: {
+          code: "INTERNAL_ERROR",
+          message: "도어락 비밀번호 조회 처리 중 오류가 발생했습니다.",
+        },
+        requestId,
+      },
+      { status: 500, headers: NO_STORE_HEADERS }
+    );
+  }
 }
 
 export async function POST(request: Request, context: RouteParams) {

@@ -86,11 +86,109 @@ export interface EventBreakdownItem {
   distinctBrowserCount: number;
 }
 
+export type AnalyticsAuthFilter = "all" | "guest" | "authenticated";
+
 export interface PmfAnalyticsFilter {
   experimentKey?: string;
   startsAt?: string;
   endsAt?: string;
   includeTest?: boolean;
+  authFilter?: AnalyticsAuthFilter;
+}
+
+export interface ServiceDailyTrendRow {
+  date: string; // YYYY-MM-DD (KST)
+  visitingBrowsers: number;
+  mapBrowsers: number;
+  mapViews: number;
+  markerClicks: number;
+  cardClicks: number;
+  detailViews: number;
+  directionsClicks: number;
+  paymentButtonClicks: number;
+  approvedPayments: number;
+  testModePayments: number;
+  issuedTickets: number;
+  submittedReceipts: number;
+  refundsSucceeded: number;
+}
+
+export interface ServiceRestroomTypeStats {
+  markerClicks: number;
+  cardClicks: number;
+  detailViews: number;
+  directionsClicks: number;
+  paymentButtonClicks: number;
+  cardToDirectionsRatePercent: number | null;
+}
+
+export interface RestroomInterestRow {
+  restroomId: string;
+  restroomName: string;
+  restroomType: "public" | "partner" | "unknown";
+  markerClicks: number;
+  cardViews: number;
+  detailViews: number;
+  directionsClicks: number;
+  paymentButtonClicks: number;
+  distinctBrowsers: number;
+}
+
+export interface ServiceUsageMetrics {
+  dateRange: {
+    startsAt: string;
+    endsAt: string;
+  };
+  authFilter?: AnalyticsAuthFilter;
+  authSplit?: {
+    guestEvents: number;
+    authenticatedEvents: number;
+    guestBrowsers: number;
+    authenticatedBrowsers: number;
+  };
+  overview: {
+    visitingBrowsers: number;
+    mapBrowsers: number;
+    mapViews: number;
+    markerClicks: number;
+    markerClickBrowsers: number;
+    cardClicks: number;
+    cardViewBrowsers: number;
+    detailViews: number;
+    detailViewBrowsers: number;
+    directionsClicks: number;
+    directionsClickBrowsers: number;
+    paymentButtonClicks: number;
+    paymentButtonClickBrowsers: number;
+    partnerDetailViews: number;
+    partnerDetailViewBrowsers: number;
+    cardToDirectionsExposedBrowsers: number;
+    cardToDirectionsConvertedBrowsers: number;
+    cardToDirectionsRatePercent: number | null;
+    partnerDetailExposedBrowsers: number;
+    partnerDetailToPaymentBrowsers: number;
+    partnerDetailToPaymentRatePercent: number | null;
+    approvedPayments: number;
+    testModePayments: number;
+    issuedTickets: number;
+    submittedReceipts: number;
+    approvedReceipts: number;
+    refundsSucceeded: number;
+  };
+  byRestroomType: {
+    public: ServiceRestroomTypeStats;
+    partner: ServiceRestroomTypeStats;
+  };
+  restroomInterestRanking: RestroomInterestRow[];
+  directionsRanking: RestroomInterestRow[];
+  dailyTrend: ServiceDailyTrendRow[];
+  analyticsConfig: {
+    nextPublicAnalyticsEnabledEnv: string;
+    actuallyGatedByEnv: boolean;
+    trackedClientEvents: string[];
+    trackedServerEvents: string[];
+    untrackedEvents: string[];
+  };
 }
 
 export interface PmfReportData {
@@ -113,6 +211,7 @@ export interface PmfReportData {
     h5: MetricHypothesisH5;
   };
   eventBreakdown: EventBreakdownItem[];
+  serviceMetrics?: ServiceUsageMetrics;
   generatedAt: string;
 }
 

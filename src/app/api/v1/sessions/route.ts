@@ -10,6 +10,25 @@ import { createVisitorSession, EventError } from "@/lib/events";
 export async function POST(request: Request) {
   const requestId = crypto.randomUUID();
 
+  const analyticsEnabled =
+    (process.env["NEXT_PUBLIC_ANALYTICS_ENABLED"] ??
+      process.env.NEXT_PUBLIC_ANALYTICS_ENABLED) === "true";
+
+  if (!analyticsEnabled) {
+    return NextResponse.json(
+      {
+        ok: false,
+        success: false,
+        error: {
+          code: "ANALYTICS_DISABLED",
+          message: "현재 환경에서는 선택적 행동 분석 수집이 비활성화되어 있습니다.",
+        },
+        requestId,
+      },
+      { status: 403 }
+    );
+  }
+
   if (!isSupabaseAuthConfigured()) {
     return NextResponse.json(
       {

@@ -194,6 +194,16 @@ export default async function HomePage() {
             <li>제휴 가게 입점: 무료 등록 신청 및 관리자 승인 후 화장실 운영</li>
           </ul>
         </div>
+
+        <footer className="mt-5 flex flex-wrap items-center justify-center gap-3 text-[11px] text-slate-500 dark:text-slate-400">
+          <Link
+            href="/map?analyticsSettings=1"
+            data-testid="home-analytics-settings-link"
+            className="underline hover:text-slate-800 dark:hover:text-slate-200"
+          >
+            이용 통계 설정
+          </Link>
+        </footer>
       </div>
     </AppShell>
   );

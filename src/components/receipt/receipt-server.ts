@@ -48,18 +48,26 @@ async function resolveQueryClient(
  */
 export async function listCustomerReceiptsAndEligibleSessions(params: {
   userId: string;
+  accessSessionId?: string | null;
   injectedClient?: SupabaseClient<Database>;
 }): Promise<CustomerReceiptsData> {
-  const { userId, injectedClient } = params;
+  const { userId, accessSessionId, injectedClient } = params;
 
   if (!userId) {
     throw new CustomerReceiptError("UNAUTHENTICATED", "로그인이 필요합니다.", 401);
   }
 
+  const trimmedSessionId = accessSessionId?.trim() || null;
+  const uuidRegex =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (trimmedSessionId && !uuidRegex.test(trimmedSessionId)) {
+    return { receipts: [], eligibleSessions: [] };
+  }
+
   const client = await resolveQueryClient(injectedClient);
 
   // 1. Fetch user's receipt submissions ordered by created_at DESC
-  const { data: rawReceipts, error: receiptsErr } = await (client as any)
+  let receiptsQuery = (client as any)
     .from("receipt_submissions")
     .select(`
       id,
@@ -78,8 +86,16 @@ export async function listCustomerReceiptsAndEligibleSessions(params: {
       created_at,
       updated_at
     `)
-    .eq("user_id", userId)
-    .order("created_at", { ascending: false });
+    .eq("user_id", userId);
+
+  if (trimmedSessionId) {
+    receiptsQuery = receiptsQuery.eq("access_session_id", trimmedSessionId);
+  }
+
+  const { data: rawReceipts, error: receiptsErr } = await receiptsQuery.order(
+    "created_at",
+    { ascending: false }
+  );
 
   if (receiptsErr) {
     throw new CustomerReceiptError(
@@ -237,7 +253,7 @@ export async function listCustomerReceiptsAndEligibleSessions(params: {
   });
 
   // 6. Fetch all eligible access sessions for this user (approved test deposits)
-  const { data: eligibleSessionRows } = await (client as any)
+  let sessionsQuery = (client as any)
     .from("access_sessions")
     .select(`
       id,
@@ -248,9 +264,15 @@ export async function listCustomerReceiptsAndEligibleSessions(params: {
       expires_at,
       created_at
     `)
-    .eq("user_id", userId)
+    .eq("user_id", userId);
+
+  if (trimmedSessionId) {
+    sessionsQuery = sessionsQuery.eq("id", trimmedSessionId);
+  }
+
+  const { data: eligibleSessionRows } = await sessionsQuery
     .order("created_at", { ascending: false })
-    .limit(50);
+    .limit(trimmedSessionId ? 1 : 50);
 
   const eligibleSessions: EligibleAccessSessionItem[] = [];
 
@@ -326,7 +348,29 @@ export async function listCustomerReceiptsAndEligibleSessions(params: {
       (approvedOrders || []).map((o: any) => o.access_session_id)
     );
 
-    // Check which sessions already have pending or approved receipts
+    const approvedOrderIds = (approvedOrders || []).map((o: any) => o.id as string);
+    const refundedOrderIds = new Set<string>();
+    if (approvedOrderIds.length > 0) {
+      const { data: activeRefunds } = await (client as any)
+        .from("payment_refunds")
+        .select("payment_order_id, status")
+        .in("payment_order_id", approvedOrderIds)
+        .in("status", ["succeeded", "requested", "processing"]);
+
+      for (const ref of activeRefunds || []) {
+        refundedOrderIds.add(ref.payment_order_id);
+      }
+    }
+
+    // Track latest receipt status per access_session_id (receipts are ordered created_at DESC)
+    const latestReceiptStatusBySession = new Map<string, ReceiptSubmissionStatus>();
+    for (const r of receipts) {
+      if (!latestReceiptStatusBySession.has(r.accessSessionId)) {
+        latestReceiptStatusBySession.set(r.accessSessionId, r.submissionStatus);
+      }
+    }
+
+    // Check which sessions already have pending, approved, or rejected receipts
     const pendingSessionIds = new Set(
       receipts
         .filter(
@@ -343,6 +387,12 @@ export async function listCustomerReceiptsAndEligibleSessions(params: {
         .map((r) => r.accessSessionId)
     );
 
+    const rejectedSessionIds = new Set(
+      Array.from(latestReceiptStatusBySession.entries())
+        .filter(([, st]) => st === "rejected")
+        .map(([sid]) => sid)
+    );
+
     const now = new Date();
 
     for (const session of eligibleSessionRows) {
@@ -357,6 +407,7 @@ export async function listCustomerReceiptsAndEligibleSessions(params: {
       const order = (approvedOrders || []).find(
         (o: any) => o.access_session_id === session.id
       );
+      const isRefunded = order ? refundedOrderIds.has(order.id) : false;
 
       const windowHours = policy?.receipt_window_hours ?? 24;
       const baseTime = session.authorized_at
@@ -379,6 +430,9 @@ export async function listCustomerReceiptsAndEligibleSessions(params: {
         isWindowExpired,
         hasPendingReceipt: pendingSessionIds.has(session.id),
         hasApprovedReceipt: approvedSessionIds.has(session.id),
+        hasRejectedReceipt: rejectedSessionIds.has(session.id),
+        isRefunded,
+        latestSubmissionStatus: latestReceiptStatusBySession.get(session.id) ?? null,
       });
     }
   }

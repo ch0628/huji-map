@@ -6,6 +6,19 @@ import type { Business, BusinessRegistrationStatus } from "@/lib/businesses/type
 import { createBusinessSchema } from "@/lib/businesses/validation";
 import type { AddressSearchFn, AddressSearchResult } from "@/lib/maps/address-search";
 import AddressSearchField from "@/components/map/AddressSearchField";
+import { focusFirstErrorField } from "@/lib/forms/validation-ux";
+
+const BUSINESS_CATEGORY_PRESETS = [
+  "카페",
+  "음식점",
+  "편의점",
+  "서점/문구",
+  "헬스/뷰티",
+] as const;
+
+function isPresetBusinessCategory(value: string): boolean {
+  return (BUSINESS_CATEGORY_PRESETS as readonly string[]).includes(value);
+}
 
 interface BusinessFormProps {
   initialData?: Business | null;
@@ -31,8 +44,20 @@ export default function BusinessForm({
   const isReadOnly = isPending || isSuspended;
 
   // Form states
+  const initialCategoryValue = initialData?.category?.trim() ?? "카페";
+  const initialIsPreset = initialData
+    ? isPresetBusinessCategory(initialCategoryValue)
+    : true;
   const [name, setName] = useState(initialData?.name ?? "");
-  const [category, setCategory] = useState(initialData?.category ?? "카페");
+  const [categoryPreset, setCategoryPreset] = useState<string>(
+    initialIsPreset ? initialCategoryValue : "기타"
+  );
+  const [customCategory, setCustomCategory] = useState<string>(
+    initialIsPreset ? "" : initialCategoryValue === "기타" ? "" : initialCategoryValue
+  );
+  const category =
+    categoryPreset === "기타" ? customCategory : categoryPreset;
+  const isCustomCategoryActive = categoryPreset === "기타";
   const [description, setDescription] = useState(
     initialData?.description ?? ""
   );
@@ -90,17 +115,36 @@ export default function BusinessForm({
     });
   };
 
+  const clearFieldError = (key: string) => {
+    setFieldErrors((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
   const validateForm = () => {
     setFieldErrors({});
     setErrorBanner(null);
 
-    if (mode === "create") {
-      const errors: Record<string, string> = {};
-      if (!hasValidCoordinates) {
-        errors.coordinates =
-          "주소 검색을 통해 도로명주소 또는 지번주소를 선택해 위치를 확정해 주세요.";
+    const errors: Record<string, string> = {};
+    if (!isApproved || mode === "create") {
+      if (!name.trim()) {
+        errors.name = "가게 이름을 입력해 주세요.";
       }
+      if (!category.trim()) {
+        errors.category = "업종을 선택하거나 직접 입력해 주세요.";
+      }
+      if (!roadAddress.trim() || !hasValidCoordinates) {
+        errors.coordinates = "주소 검색을 통해 위치를 선택해 주세요.";
+        if (!roadAddress.trim()) {
+          errors.road_address = "주소 검색을 통해 도로명주소를 선택해 주세요.";
+        }
+      }
+    }
 
+    if (mode === "create") {
       const parsed = createBusinessSchema.safeParse({
         name,
         category,
@@ -118,37 +162,44 @@ export default function BusinessForm({
       if (!parsed.success) {
         for (const issue of parsed.error.issues) {
           const path = issue.path[0]?.toString() ?? "general";
-          if ((path === "latitude" || path === "longitude") && !hasValidCoordinates) {
+          if ((path === "latitude" || path === "longitude" || path === "road_address") && !hasValidCoordinates) {
             continue;
           }
           if (!errors[path]) {
-            errors[path] = issue.message;
+            if (path === "website_url") {
+              errors[path] = "http:// 또는 https://로 시작하는 올바른 웹 주소를 입력해 주세요.";
+            } else if (path === "registration_number") {
+              errors[path] = "사업자등록번호 10자리 숫자(예: 123-45-67890)를 입력해 주세요.";
+            } else if (path === "name") {
+              errors[path] = "가게 이름을 입력해 주세요.";
+            } else if (path === "category") {
+              errors[path] = "업종을 선택하거나 직접 입력해 주세요.";
+            } else {
+              errors[path] = issue.message;
+            }
           }
         }
       }
+    } else if (websiteUrl.trim() && !/^https?:\/\//i.test(websiteUrl.trim())) {
+      errors.website_url = "http:// 또는 https://로 시작하는 올바른 웹 주소를 입력해 주세요.";
+    }
 
-      if (Object.keys(errors).length > 0) {
-        setFieldErrors(errors);
-        setErrorBanner("입력한 정보에 오류가 있습니다. 확인 후 다시 시도해 주세요.");
-        return false;
-      }
-    } else {
-      const errors: Record<string, string> = {};
-      if (!isApproved) {
-        if (!name.trim()) errors.name = "가게명을 입력해 주세요.";
-        if (!category.trim()) errors.category = "업종을 입력해 주세요.";
-        if (!roadAddress.trim()) errors.road_address = "주소 검색을 통해 도로명주소를 선택해 주세요.";
-        if (!hasValidCoordinates) {
-          errors.coordinates =
-            "주소 검색을 통해 도로명주소 또는 지번주소를 선택해 위치를 확정해 주세요.";
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      setErrorBanner("필수 입력 항목 또는 입력 형식을 확인해 주세요.");
+      focusFirstErrorField(
+        ["name", "category", "road_address", "coordinates", "website_url", "registration_number"],
+        errors,
+        {
+          name: "biz-name",
+          category: isCustomCategoryActive ? "biz-category" : "biz-category-select",
+          road_address: "biz-road-address-search",
+          coordinates: "biz-road-address-search",
+          website_url: "biz-website",
+          registration_number: "biz-reg-number",
         }
-      }
-
-      if (Object.keys(errors).length > 0) {
-        setFieldErrors(errors);
-        setErrorBanner("입력한 정보에 오류가 있습니다. 확인 후 다시 시도해 주세요.");
-        return false;
-      }
+      );
+      return false;
     }
 
     return true;
@@ -356,60 +407,82 @@ export default function BusinessForm({
             required
             disabled={isReadOnly || isApproved}
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            aria-invalid={Boolean(fieldErrors.name)}
+            aria-describedby={fieldErrors.name ? "biz-name-error" : undefined}
+            onChange={(e) => {
+              setName(e.target.value);
+              if (e.target.value.trim()) clearFieldError("name");
+            }}
             placeholder="예: 카페 휴지 수원역점"
             maxLength={100}
             className={`mt-1 flex min-h-[44px] w-full rounded-xl border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-500 dark:bg-slate-800 dark:text-white dark:disabled:bg-slate-900 ${
-              fieldErrors.name ? "border-rose-400 ring-rose-200" : "border-slate-300 dark:border-slate-700"
+              fieldErrors.name ? "border-rose-500 ring-1 ring-rose-500/30" : "border-slate-300 dark:border-slate-700"
             }`}
           />
           {fieldErrors.name && (
-            <p className="mt-1 text-xs text-rose-500">{fieldErrors.name}</p>
+            <p id="biz-name-error" role="alert" className="mt-1 text-xs font-medium text-rose-600 dark:text-rose-400">
+              {fieldErrors.name}
+            </p>
           )}
         </div>
 
         {/* 업종 */}
         <div>
-          <label htmlFor="biz-category" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+          <label htmlFor="biz-category-select" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
             업종 분류 <span className="text-rose-500">*</span>
           </label>
           <div className="mt-1 flex flex-col gap-2 sm:flex-row">
             <select
               id="biz-category-select"
-              aria-label="업종 추천 선택"
+              aria-label="업종 분류 선택"
               disabled={isReadOnly || isApproved}
-              value={["카페", "음식점", "편의점", "서점/문구", "헬스/뷰티", "기타"].includes(category) ? category : "기타"}
+              value={categoryPreset}
               onChange={(e) => {
-                if (e.target.value !== "기타") {
-                  setCategory(e.target.value);
+                const next = e.target.value;
+                setCategoryPreset(next);
+                if (next !== "기타") {
+                  clearFieldError("category");
                 }
               }}
               className="flex min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:disabled:bg-slate-900 sm:w-auto"
             >
-              <option value="카페">카페</option>
-              <option value="음식점">음식점</option>
-              <option value="편의점">편의점</option>
-              <option value="서점/문구">서점/문구</option>
-              <option value="헬스/뷰티">헬스/뷰티</option>
+              {BUSINESS_CATEGORY_PRESETS.map((preset) => (
+                <option key={preset} value={preset}>
+                  {preset}
+                </option>
+              ))}
               <option value="기타">직접 입력 (기타)</option>
             </select>
             <input
               id="biz-category"
               name="category"
               type="text"
-              required
-              disabled={isReadOnly || isApproved}
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              placeholder="업종 직접 입력 (예: 카페)"
+              aria-label="직접 입력 업종명"
+              required={isCustomCategoryActive}
+              disabled={isReadOnly || isApproved || !isCustomCategoryActive}
+              value={isCustomCategoryActive ? customCategory : categoryPreset}
+              aria-invalid={Boolean(fieldErrors.category)}
+              aria-describedby={fieldErrors.category ? "biz-category-error" : undefined}
+              onChange={(e) => {
+                if (!isCustomCategoryActive) return;
+                setCustomCategory(e.target.value);
+                if (e.target.value.trim()) clearFieldError("category");
+              }}
+              placeholder={
+                isCustomCategoryActive
+                  ? "업종을 직접 입력해 주세요 (예: 베이커리)"
+                  : "선택한 업종 자동 적용됨"
+              }
               maxLength={50}
-              className={`flex min-h-[44px] w-full min-w-0 flex-1 rounded-xl border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-500 dark:bg-slate-800 dark:text-white dark:disabled:bg-slate-900 ${
-                fieldErrors.category ? "border-rose-400" : "border-slate-300 dark:border-slate-700"
+              className={`flex min-h-[44px] w-full min-w-0 flex-1 rounded-xl border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500 dark:bg-slate-800 dark:text-white dark:disabled:bg-slate-900/70 ${
+                fieldErrors.category ? "border-rose-500 ring-1 ring-rose-500/30" : "border-slate-300 dark:border-slate-700"
               }`}
             />
           </div>
           {fieldErrors.category && (
-            <p className="mt-1 text-xs text-rose-500">{fieldErrors.category}</p>
+            <p id="biz-category-error" role="alert" className="mt-1 text-xs font-medium text-rose-600 dark:text-rose-400">
+              {fieldErrors.category}
+            </p>
           )}
         </div>
 
@@ -502,15 +575,22 @@ export default function BusinessForm({
             type="url"
             disabled={isReadOnly}
             value={websiteUrl}
-            onChange={(e) => setWebsiteUrl(e.target.value)}
+            aria-invalid={Boolean(fieldErrors.website_url)}
+            aria-describedby={fieldErrors.website_url ? "biz-website-error" : undefined}
+            onChange={(e) => {
+              setWebsiteUrl(e.target.value);
+              clearFieldError("website_url");
+            }}
             placeholder="예: https://instagram.com/my_cafe"
             maxLength={300}
             className={`mt-1 flex min-h-[44px] w-full rounded-xl border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 dark:bg-slate-800 dark:text-white dark:disabled:bg-slate-900 ${
-              fieldErrors.website_url ? "border-rose-400" : "border-slate-300 dark:border-slate-700"
+              fieldErrors.website_url ? "border-rose-500 ring-1 ring-rose-500/30" : "border-slate-300 dark:border-slate-700"
             }`}
           />
           {fieldErrors.website_url && (
-            <p className="mt-1 text-xs text-rose-500">{fieldErrors.website_url}</p>
+            <p id="biz-website-error" role="alert" className="mt-1 text-xs font-medium text-rose-600 dark:text-rose-400">
+              {fieldErrors.website_url}
+            </p>
           )}
         </div>
 
@@ -525,18 +605,25 @@ export default function BusinessForm({
               name="registration_number"
               type="text"
               value={registrationNumber}
-              onChange={(e) => setRegistrationNumber(e.target.value)}
+              aria-invalid={Boolean(fieldErrors.registration_number)}
+              aria-describedby={fieldErrors.registration_number ? "biz-reg-error" : undefined}
+              onChange={(e) => {
+                setRegistrationNumber(e.target.value);
+                clearFieldError("registration_number");
+              }}
               placeholder="예: 123-45-67890 (숫자 10자리)"
               maxLength={12}
               className={`mt-1 flex min-h-[44px] w-full rounded-xl border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:text-white ${
-                fieldErrors.registration_number ? "border-rose-400" : "border-slate-300 dark:border-slate-700"
+                fieldErrors.registration_number ? "border-rose-500 ring-1 ring-rose-500/30" : "border-slate-300 dark:border-slate-700"
               }`}
             />
             <p className="mt-1 text-[11px] text-slate-500">
               * 사업자등록번호는 비공개 검증 근거로만 안전하게 저장되며, 일반 사용자 및 화면에 노출되지 않습니다.
             </p>
             {fieldErrors.registration_number && (
-              <p className="mt-1 text-xs text-rose-500">{fieldErrors.registration_number}</p>
+              <p id="biz-reg-error" role="alert" className="mt-1 text-xs font-medium text-rose-600 dark:text-rose-400">
+                {fieldErrors.registration_number}
+              </p>
             )}
           </div>
         )}

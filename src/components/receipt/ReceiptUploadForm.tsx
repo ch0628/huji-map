@@ -3,11 +3,13 @@
 import React, { useState, useRef, useCallback } from "react";
 import type { ReceiptMimeType, PublicReceiptSubmission } from "@/lib/receipts/types";
 import { MAX_RECEIPT_FILE_SIZE } from "@/lib/receipts/validation";
+import { focusFirstErrorField } from "@/lib/forms/validation-ux";
 
 export interface ReceiptUploadFormProps {
   readonly accessSessionId: string;
   readonly partnerName?: string;
   readonly restroomName?: string;
+  readonly hideContextSummary?: boolean;
   readonly onSuccess?: (receipt: PublicReceiptSubmission) => void;
   readonly onCancel?: () => void;
   readonly injectedUploadIntentRequester?: (params: {
@@ -43,6 +45,7 @@ export function ReceiptUploadForm({
   accessSessionId,
   partnerName,
   restroomName,
+  hideContextSummary = false,
   onSuccess,
   onCancel,
   injectedUploadIntentRequester,
@@ -56,6 +59,7 @@ export function ReceiptUploadForm({
   const [submittedReceipt, setSubmittedReceipt] = useState<PublicReceiptSubmission | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const submitInFlightRef = useRef(false);
 
   const clearSelection = useCallback(() => {
     if (previewUrl) {
@@ -87,11 +91,7 @@ export function ReceiptUploadForm({
 
     // 2. 파일 크기 검증 (10MB 제한)
     if (file.size <= 0 || file.size > MAX_RECEIPT_FILE_SIZE) {
-      setErrorMessage(
-        `파일 크기는 1바이트 이상 10MB 이하여야 합니다. (선택한 파일: ${(
-          file.size / (1024 * 1024)
-        ).toFixed(2)}MB)`
-      );
+      setErrorMessage("파일 크기는 1바이트 이상 10MB 이하여야 합니다.");
       setStep("error");
       return;
     }
@@ -109,8 +109,19 @@ export function ReceiptUploadForm({
   };
 
   const handleUploadAndSubmit = async () => {
-    if (!selectedFile || !accessSessionId) return;
+    if (!accessSessionId || submitInFlightRef.current) return;
+    if (!selectedFile) {
+      setErrorMessage("영수증 사진 파일을 선택해 주세요.");
+      setStep("error");
+      focusFirstErrorField(
+        ["file"],
+        { file: "영수증 사진 파일을 선택해 주세요." },
+        { file: "receipt-select-file-trigger" }
+      );
+      return;
+    }
 
+    submitInFlightRef.current = true;
     setErrorMessage(null);
     const mimeType = selectedFile.type as ReceiptMimeType;
     const fileSizeBytes = selectedFile.size;
@@ -238,6 +249,8 @@ export function ReceiptUploadForm({
       const message =
         err instanceof Error ? err.message : "영수증 업로드 중 오류가 발생했습니다.";
       setErrorMessage(message);
+    } finally {
+      submitInFlightRef.current = false;
     }
   };
 
@@ -246,7 +259,7 @@ export function ReceiptUploadForm({
     step === "uploading_file" ||
     step === "submitting";
 
-  // 완료 화면
+  // 완료 화면 (UI-11: 핵심 정보 + 업로드 이미지 미리보기 중심, 내부 코드/파일명 제거)
   if (step === "completed" && submittedReceipt) {
     return (
       <div
@@ -254,41 +267,36 @@ export function ReceiptUploadForm({
         className="rounded-2xl border border-emerald-300 bg-emerald-50 p-5 text-emerald-950 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200"
       >
         <div className="flex items-center gap-2 mb-2">
-          <span className="text-xl">✅</span>
-          <h3 className="text-base font-bold">영수증 제출이 완료되었습니다</h3>
+          <span className="text-xl" aria-hidden="true">✅</span>
+          <h3 className="text-base font-bold break-keep">영수증이 제출되었습니다.</h3>
         </div>
-        <p className="text-xs leading-relaxed text-emerald-900 dark:text-emerald-300">
-          제출된 영수증은 <strong>관리자 수동 검토 대기열</strong>에 안전하게 등록되었습니다.
-          검토 및 승인이 완료되면 보증금(테스트 결제 취소) 환급 처리가 진행됩니다.
+        {!hideContextSummary && partnerName && (
+          <p className="text-xs font-semibold text-emerald-900 dark:text-emerald-200">
+            {partnerName}
+          </p>
+        )}
+        <p
+          data-testid="completed-receipt-status"
+          className="mt-1.5 text-xs leading-relaxed text-emerald-900 dark:text-emerald-300 break-keep"
+        >
+          영수증이 승인되면 환급 절차가 진행됩니다.
         </p>
 
-        <div className="mt-4 rounded-xl bg-white p-3.5 text-xs space-y-1.5 border border-emerald-200 dark:border-emerald-900/60 dark:bg-slate-900">
-          <div className="flex justify-between">
-            <span className="text-slate-500">진행 상태:</span>
-            <span
-              data-testid="completed-receipt-status"
-              className="font-bold text-amber-600 dark:text-amber-400"
-            >
-              관리자 검토 중 (OCR/자동 승인 없음)
-            </span>
+        {previewUrl ? (
+          <div className="mt-3 max-h-56 overflow-hidden rounded-xl border border-emerald-200 bg-white p-2 flex items-center justify-center dark:border-emerald-900/60 dark:bg-slate-900">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={previewUrl}
+              alt="제출한 영수증 미리보기"
+              data-testid="receipt-completed-preview-img"
+              className="max-h-52 w-auto rounded-lg object-contain"
+            />
           </div>
-          {partnerName && (
-            <div className="flex justify-between">
-              <span className="text-slate-500">제휴 매장:</span>
-              <span className="font-semibold text-slate-800 dark:text-slate-200">
-                {partnerName}
-              </span>
-            </div>
-          )}
-          {submittedReceipt.originalFilename && (
-            <div className="flex justify-between">
-              <span className="text-slate-500">파일명:</span>
-              <span className="font-mono text-[11px] text-slate-700 dark:text-slate-300 truncate max-w-[200px]">
-                {submittedReceipt.originalFilename}
-              </span>
-            </div>
-          )}
-        </div>
+        ) : (
+          <p className="mt-3 rounded-xl bg-white/80 p-3 text-xs text-slate-600 dark:bg-slate-900/60 dark:text-slate-300">
+            영수증 이미지가 안전하게 등록되었습니다.
+          </p>
+        )}
 
         <div className="mt-4 flex flex-col gap-2">
           <button
@@ -315,26 +323,26 @@ export function ReceiptUploadForm({
       className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900"
     >
       <div className="mb-4">
-        <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-          <span>🧾</span>
-          <span>영수증 사진 업로드</span>
+        <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5 break-keep">
+          <span aria-hidden="true">🧾</span>
+          <span>
+            영수증 사진 올리기 <span className="text-rose-500">*</span>
+          </span>
         </h3>
-        {partnerName && (
-          <p className="mt-0.5 text-xs text-purple-700 dark:text-purple-400 font-semibold">
+        {!hideContextSummary && partnerName && (
+          <p className="mt-1 text-xs text-slate-700 dark:text-slate-300 font-semibold break-keep">
             {partnerName} {restroomName ? `(${restroomName})` : ""}
           </p>
         )}
-        <p className="mt-1 text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
-          제휴 매장 실제 이용(구매) 영수증 사진을 등록해 주세요. 관리자 수동 확인 후 테스트 보증금이 환급됩니다.
+        <p className="mt-1.5 text-xs leading-relaxed text-slate-600 dark:text-slate-400 break-keep">
+          매장에서 구매한 영수증 사진을 제출해 주세요. 확인 후 보증금이 환급됩니다.
         </p>
       </div>
 
-      {/* 안내 박스 */}
-      <div className="mb-4 rounded-xl bg-slate-50 p-3 text-[11px] text-slate-600 dark:bg-slate-800/60 dark:text-slate-400 space-y-1">
-        <p>• 허용 확장자: <strong>JPG, PNG, WebP</strong></p>
-        <p>• 최대 파일 크기: <strong>10MB</strong> 이하</p>
-        <p>• 주의: OCR 자동 승인 및 즉시 환급은 지원되지 않으며, 관리자 검토를 거칩니다.</p>
-      </div>
+      {/* 파일 형식 및 크기 안내 */}
+      <p className="mb-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] font-medium text-slate-600 dark:bg-slate-800/60 dark:text-slate-400">
+        JPG, PNG, WebP · 최대 10MB
+      </p>
 
       {/* 파일 선택 인풋 (숨김) */}
       <input
@@ -350,11 +358,18 @@ export function ReceiptUploadForm({
       {/* 파일 선택 버튼 또는 미리보기 영역 */}
       {!selectedFile ? (
         <button
+          id="receipt-select-file-trigger"
           type="button"
           data-testid="receipt-select-file-btn"
+          aria-invalid={Boolean(errorMessage)}
+          aria-describedby={errorMessage ? "receipt-upload-error-text" : undefined}
           onClick={() => fileInputRef.current?.click()}
           disabled={isProcessing}
-          className="flex min-h-[96px] w-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 bg-slate-50/50 p-4 text-center hover:border-purple-400 hover:bg-purple-50/30 dark:border-slate-700 dark:bg-slate-800/40 dark:hover:border-purple-600 transition"
+          className={`flex min-h-[96px] w-full flex-col items-center justify-center rounded-xl border-2 border-dashed bg-slate-50/50 p-4 text-center transition dark:bg-slate-800/40 ${
+            errorMessage
+              ? "border-rose-500 ring-1 ring-rose-500/30"
+              : "border-slate-300 hover:border-slate-400 hover:bg-slate-100/50 dark:border-slate-700 dark:hover:border-slate-500"
+          }`}
         >
           <span className="text-2xl mb-1">📸</span>
           <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
@@ -381,21 +396,13 @@ export function ReceiptUploadForm({
             </div>
           )}
 
-          <div className="flex items-center justify-between text-xs">
-            <div className="min-w-0 pr-2">
-              <p className="font-semibold text-slate-800 dark:text-slate-200 truncate">
-                {selectedFile.name}
-              </p>
-              <p className="text-[11px] text-slate-500">
-                {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB · {selectedFile.type}
-              </p>
-            </div>
+          <div className="flex items-center justify-end text-xs">
             {!isProcessing && (
               <button
                 type="button"
                 data-testid="receipt-reselect-file-btn"
                 onClick={() => fileInputRef.current?.click()}
-                className="shrink-0 text-xs font-semibold text-purple-600 hover:text-purple-700 dark:text-purple-400"
+                className="shrink-0 text-xs font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-400"
               >
                 다시 선택
               </button>
@@ -407,6 +414,7 @@ export function ReceiptUploadForm({
       {/* 에러 메시지 및 재시도 UI */}
       {errorMessage && (
         <div
+          id="receipt-upload-error-text"
           role="alert"
           data-testid="receipt-upload-error-alert"
           className="mt-3 rounded-xl border border-rose-300 bg-rose-50 p-3 text-xs text-rose-950 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-200"
@@ -420,56 +428,48 @@ export function ReceiptUploadForm({
       {isProcessing && (
         <div
           data-testid="receipt-upload-progress"
-          className="mt-4 rounded-xl bg-purple-50 p-3.5 text-center text-xs text-purple-900 dark:bg-purple-950/40 dark:text-purple-200 border border-purple-200 dark:border-purple-800"
+          className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3.5 text-center text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200"
         >
-          <div className="mx-auto mb-2 h-5 w-5 animate-spin rounded-full border-2 border-purple-600 border-t-transparent" />
-          <p className="font-bold">
-            {step === "requesting_intent" && "업로드 보안 권한 확인 중..."}
-            {step === "uploading_file" && "영수증 사진 안전 전송 중..."}
-            {step === "submitting" && "영수증 심사 등록 중..."}
-          </p>
-          <p className="mt-0.5 text-[11px] text-purple-700 dark:text-purple-300">
-            잠시만 기다려 주세요. 화면을 벗어나지 마세요.
-          </p>
+          <div className="mx-auto mb-2 h-5 w-5 animate-spin rounded-full border-2 border-slate-700 border-t-transparent dark:border-blue-400" />
+          <p className="font-bold">업로드 중입니다. 잠시만 기다려 주세요.</p>
         </div>
       )}
 
       {/* 액션 버튼 */}
-      <div className="mt-4 flex gap-2">
-        {onCancel && (
-          <button
-            type="button"
-            data-testid="receipt-upload-cancel-btn"
-            onClick={onCancel}
-            disabled={isProcessing}
-            className="flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 disabled:opacity-50"
-          >
-            취소
-          </button>
-        )}
+      {!isProcessing && (
+        <div className="mt-4 flex gap-2">
+          {onCancel && (
+            <button
+              type="button"
+              data-testid="receipt-upload-cancel-btn"
+              onClick={onCancel}
+              className="flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+            >
+              취소
+            </button>
+          )}
 
-        {step === "error" ? (
-          <button
-            type="button"
-            data-testid="receipt-upload-retry-btn"
-            onClick={handleUploadAndSubmit}
-            disabled={!selectedFile || isProcessing}
-            className="flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-rose-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-rose-700 disabled:opacity-50"
-          >
-            다시 시도하기
-          </button>
-        ) : (
-          <button
-            type="button"
-            data-testid="receipt-upload-submit-btn"
-            onClick={handleUploadAndSubmit}
-            disabled={!selectedFile || isProcessing}
-            className="flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-purple-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-purple-700 disabled:opacity-50"
-          >
-            {isProcessing ? "제출 처리 중..." : "영수증 제출하기"}
-          </button>
-        )}
-      </div>
+          {step === "error" ? (
+            <button
+              type="button"
+              data-testid="receipt-upload-retry-btn"
+              onClick={handleUploadAndSubmit}
+              className="flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-rose-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-rose-700"
+            >
+              다시 시도하기
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-testid="receipt-upload-submit-btn"
+              onClick={handleUploadAndSubmit}
+              className="flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-slate-800 dark:bg-blue-600 dark:hover:bg-blue-700"
+            >
+              영수증 제출하기
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

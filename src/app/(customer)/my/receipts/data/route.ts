@@ -13,8 +13,10 @@ const NO_STORE_HEADERS = {
   Expires: "0",
 };
 
-export async function GET() {
+export async function GET(request: Request) {
   const requestId = crypto.randomUUID();
+  const url = new URL(request.url);
+  const accessSessionId = url.searchParams.get("accessSessionId");
 
   if (!isSupabaseAuthConfigured()) {
     return NextResponse.json(
@@ -64,6 +66,7 @@ export async function GET() {
   try {
     const data = await listCustomerReceiptsAndEligibleSessions({
       userId: authSession.user.id,
+      accessSessionId,
     });
 
     return NextResponse.json(

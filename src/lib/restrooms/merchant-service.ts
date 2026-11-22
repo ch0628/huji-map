@@ -544,6 +544,13 @@ export async function createMerchantRestroomPolicy(
   await assertMerchantAccessToRestroom(supabase, userId, restroomId);
 
   const resolved = resolvePolicyAccessMode(input);
+  const effectiveAccessMode = resolved.access_mode;
+  const effectiveDeposit = resolved.deposit_amount_krw;
+  const effectiveRefund = resolved.refund_eligible;
+  const effectiveReceiptWindow =
+    effectiveAccessMode === "free" ? null : (input.receipt_window_hours ?? 24);
+  const effectiveMinPurchase =
+    effectiveAccessMode === "free" ? 0 : (input.min_purchase_krw ?? 0);
 
   // Try atomic RPC first (enforces row-lock & trigger immutability)
   if (typeof supabase.rpc === "function") {
@@ -551,11 +558,11 @@ export async function createMerchantRestroomPolicy(
       "create_merchant_restroom_policy",
       {
         p_restroom_id: restroomId,
-        p_access_mode: resolved.access_mode,
-        p_deposit_amount_krw: resolved.deposit_amount_krw,
-        p_refund_eligible: resolved.refund_eligible,
-        p_receipt_window_hours: input.receipt_window_hours ?? null,
-        p_min_purchase_krw: input.min_purchase_krw ?? null,
+        p_access_mode: effectiveAccessMode,
+        p_deposit_amount_krw: effectiveDeposit,
+        p_refund_eligible: effectiveRefund,
+        p_receipt_window_hours: effectiveReceiptWindow,
+        p_min_purchase_krw: effectiveMinPurchase,
       }
     );
     if (!rpcError && rpcPolicy) {
@@ -564,6 +571,19 @@ export async function createMerchantRestroomPolicy(
     if (rpcError) {
       if (rpcError.code === "42501") {
         throw new MerchantRestroomError("FORBIDDEN", `정책 생성 권한이 없습니다: ${rpcError.message}`, 403);
+      }
+      if (
+        rpcError.code === "HM002" ||
+        rpcError.message?.includes("POLICY_UNCHANGED")
+      ) {
+        throw new MerchantRestroomError(
+          "POLICY_UNCHANGED",
+          "현재 적용 중인 이용 정책과 동일합니다. 다른 조건을 선택해 주세요.",
+          409
+        );
+      }
+      if (rpcError.code === "HM005") {
+        throw new MerchantRestroomError("VALIDATION_ERROR", rpcError.message, 400);
       }
       if (
         rpcError.code !== "PGRST202" &&
@@ -576,22 +596,40 @@ export async function createMerchantRestroomPolicy(
   }
 
   // Fallback to table queries
-  // 1. Find max version
+  // 1. Fetch existing policies (to check active policy equality & find max version)
   const { data: existingPolicies, error: findError } = await supabase
     .from("restroom_access_policies")
-    .select("version")
+    .select(
+      "id, version, access_mode, deposit_amount_krw, refund_eligible, receipt_window_hours, min_purchase_krw, is_active"
+    )
     .eq("restroom_id", restroomId)
-    .order("version", { ascending: false })
-    .limit(1);
+    .order("version", { ascending: false });
 
   if (findError) {
     throw new MerchantRestroomError("POLICY_QUERY_FAILED", `기존 정책 조회 실패: ${findError.message}`, 500);
   }
 
+  const activePolicy = (existingPolicies || []).find((p: any) => Boolean(p.is_active));
+  if (
+    input.is_active !== false &&
+    activePolicy &&
+    activePolicy.access_mode === effectiveAccessMode &&
+    (activePolicy.deposit_amount_krw ?? 0) === effectiveDeposit &&
+    Boolean(activePolicy.refund_eligible) === effectiveRefund &&
+    (activePolicy.receipt_window_hours ?? null) === effectiveReceiptWindow &&
+    (activePolicy.min_purchase_krw ?? 0) === effectiveMinPurchase
+  ) {
+    throw new MerchantRestroomError(
+      "POLICY_UNCHANGED",
+      "현재 적용 중인 이용 정책과 동일합니다. 다른 조건을 선택해 주세요.",
+      409
+    );
+  }
+
   const nextVersion = (existingPolicies?.[0]?.version ?? 0) + 1;
 
   // 2. If new policy is active, deactivate existing active policies
-  if (input.is_active) {
+  if (input.is_active !== false) {
     await supabase
       .from("restroom_access_policies")
       .update({ is_active: false })
@@ -605,11 +643,11 @@ export async function createMerchantRestroomPolicy(
     .insert({
       restroom_id: restroomId,
       version: nextVersion,
-      access_mode: resolved.access_mode,
-      deposit_amount_krw: resolved.deposit_amount_krw,
-      refund_eligible: resolved.refund_eligible,
-      receipt_window_hours: input.receipt_window_hours ?? null,
-      min_purchase_krw: input.min_purchase_krw ?? null,
+      access_mode: effectiveAccessMode,
+      deposit_amount_krw: effectiveDeposit,
+      refund_eligible: effectiveRefund,
+      receipt_window_hours: effectiveReceiptWindow,
+      min_purchase_krw: effectiveMinPurchase,
       is_active: input.is_active,
       effective_from: new Date().toISOString(),
       created_by: userId,

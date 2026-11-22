@@ -6,8 +6,8 @@ import { getServerAuthSession, isE2eMockSessionAllowed } from "@/lib/auth";
 import PmfDashboardClient from "./PmfDashboardClient";
 
 export const metadata: Metadata = {
-  title: "PMF 가설 검증 대시보드 - 휴지맵 관리자",
-  description: "H1/H2/H5 핵심 PMF 가설 실험 지표 및 사용자 행동 분석 잠정 리포트",
+  title: "서비스 이용 분석 - 휴지맵 관리자",
+  description: "방문 브라우저, 지도·상세·길찾기, 결제·영수증·환급 실제 서비스 이용 분석",
 };
 
 export default async function AdminPmfAnalyticsPage() {
@@ -25,7 +25,7 @@ export default async function AdminPmfAnalyticsPage() {
 
   if (!session.configReady && !isMockAdmin && !isMockCustomer) {
     return (
-      <AppShell headerTitle="PMF 가설 검증">
+      <AppShell headerTitle="서비스 이용 분석">
         <div
           role="alert"
           className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200"
@@ -42,7 +42,7 @@ export default async function AdminPmfAnalyticsPage() {
   // Guest (unauthenticated) -> 401 Access Denied UI
   if (!isAuthenticated) {
     return (
-      <AppShell headerTitle="PMF 가설 검증">
+      <AppShell headerTitle="서비스 이용 분석">
         <div
           role="alert"
           data-testid="admin-pmf-unauthorized-401"
@@ -76,7 +76,7 @@ export default async function AdminPmfAnalyticsPage() {
   // Non-admin authenticated user (customer / merchant) -> 403 Forbidden UI
   if (!isAdmin) {
     return (
-      <AppShell headerTitle="PMF 가설 검증">
+      <AppShell headerTitle="서비스 이용 분석">
         <div
           role="alert"
           data-testid="admin-pmf-forbidden-403"
@@ -100,7 +100,7 @@ export default async function AdminPmfAnalyticsPage() {
   }
 
   return (
-    <AppShell headerTitle="PMF 가설 검증 대시보드">
+    <AppShell headerTitle="서비스 이용 분석">
       <PmfDashboardClient />
     </AppShell>
   );

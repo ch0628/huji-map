@@ -44,6 +44,17 @@ export interface SetPinResponse {
 }
 
 /**
+ * Authorized merchant/admin PIN inspection response (Cache-Control: no-store only).
+ */
+export interface GetMerchantPinResponse {
+  ok: true;
+  pin: string;
+  codeVersion: number;
+  updatedAt: string;
+  requestId: string;
+}
+
+/**
  * Zod Schema for 점주 PIN 입력 검증.
  * Doorlock PIN: 4~20 characters of digits and standard symbols (*, #).
  */

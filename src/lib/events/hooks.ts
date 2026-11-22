@@ -3,15 +3,23 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import type { PublicRestroomSummary, PublicRestroomDetail } from "@/lib/restrooms/types";
 import {
+  ANALYTICS_CONSENT_CHANGED_EVENT,
+  ANALYTICS_SESSION_RESET_EVENT,
   ensureVisitorSession,
   getOrCreateBrowserId,
+  getExistingBrowserId,
   getActiveSessionId,
+  isAnalyticsAllowed,
+  syncAnalyticsAuthBoundary,
   trackEventSafe,
   submitTravelAnswer,
   getDeviceType,
-  type TrackEventOptions,
 } from "./client";
 import type { EventIngestResult, TravelAnswerResult } from "./types";
+
+export interface UseVisitorSessionOptions {
+  isAuthenticated?: boolean;
+}
 
 export interface UseVisitorSessionResult {
   sessionId: string | null;
@@ -22,39 +30,77 @@ export interface UseVisitorSessionResult {
 
 /**
  * React hook to manage visitor session initialization on client mount.
- * Deduplicates in StrictMode and ensures session is registered before event dispatch.
+ * Never creates or persists a browser ID or visitor session unless optional analytics is permitted.
+ * Rotates session IDs across login/logout auth transitions so guest and member behaviors stay isolated.
  */
-export function useVisitorSession(): UseVisitorSessionResult {
-  const [sessionId, setSessionId] = useState<string | null>(() => getActiveSessionId());
+export function useVisitorSession(
+  options?: UseVisitorSessionOptions
+): UseVisitorSessionResult {
+  const isAuthenticated = options?.isAuthenticated;
+  const [sessionId, setSessionId] = useState<string | null>(() =>
+    isAnalyticsAllowed() ? getActiveSessionId() : null
+  );
   const [browserId, setBrowserId] = useState<string>("");
   const [isReady, setIsReady] = useState<boolean>(false);
   const [error, setError] = useState<Error | null>(null);
   const isInitializingRef = useRef<boolean>(false);
 
   useEffect(() => {
-    const bId = getOrCreateBrowserId();
-    setBrowserId(bId);
-
-    const active = getActiveSessionId();
-    if (active) {
-      setSessionId(active);
-      setIsReady(true);
-      return;
+    if (isAuthenticated !== undefined) {
+      syncAnalyticsAuthBoundary(isAuthenticated);
     }
 
-    if (isInitializingRef.current) return;
-    isInitializingRef.current = true;
-
-    ensureVisitorSession()
-      .then((newSessionId) => {
-        setSessionId(newSessionId);
+    const syncSession = () => {
+      if (!isAnalyticsAllowed()) {
+        setSessionId(null);
+        setBrowserId("");
         setIsReady(true);
-      })
-      .catch((err) => {
-        setError(err instanceof Error ? err : new Error("세션 초기화 실패"));
-        setIsReady(true); // 비차단 복구
-      });
-  }, []);
+        isInitializingRef.current = false;
+        return;
+      }
+
+      const bId = getExistingBrowserId() ?? getOrCreateBrowserId();
+      setBrowserId(bId);
+
+      const active = getActiveSessionId();
+      if (active) {
+        setSessionId(active);
+        setIsReady(true);
+        return;
+      }
+
+      if (isInitializingRef.current) return;
+      isInitializingRef.current = true;
+
+      ensureVisitorSession()
+        .then((newSessionId) => {
+          setSessionId(newSessionId);
+          setIsReady(true);
+        })
+        .catch((err) => {
+          setError(err instanceof Error ? err : new Error("세션 초기화 실패"));
+          setIsReady(true); // 비차단 복구
+        })
+        .finally(() => {
+          isInitializingRef.current = false;
+        });
+    };
+
+    syncSession();
+
+    const handleConsentChange = () => {
+      syncSession();
+    };
+
+    window.addEventListener(ANALYTICS_CONSENT_CHANGED_EVENT, handleConsentChange);
+    window.addEventListener(ANALYTICS_SESSION_RESET_EVENT, handleConsentChange);
+    window.addEventListener("storage", handleConsentChange);
+    return () => {
+      window.removeEventListener(ANALYTICS_CONSENT_CHANGED_EVENT, handleConsentChange);
+      window.removeEventListener(ANALYTICS_SESSION_RESET_EVENT, handleConsentChange);
+      window.removeEventListener("storage", handleConsentChange);
+    };
+  }, [isAuthenticated]);
 
   return { sessionId, browserId, isReady, error };
 }
@@ -117,14 +163,49 @@ export function useEventTracker() {
   const hasTrackedLandingRef = useRef<boolean>(false);
   const hasTrackedMapLoadedRef = useRef<boolean>(false);
   const viewedCardIdsRef = useRef<Set<string>>(new Set());
+  const openedDetailIdsRef = useRef<Set<string>>(new Set());
   const unavailableNoticeIdsRef = useRef<Set<string>>(new Set());
   const lastClickedMarkerRef = useRef<{ id: string; time: number } | null>(null);
+  const lastClickedDirectionsRef = useRef<{ key: string; time: number } | null>(null);
+  const lastClickedPaymentRef = useRef<{ id: string; time: number } | null>(null);
+
+  useEffect(() => {
+    const handleConsentChange = (e: Event) => {
+      const detail = (e as CustomEvent<{ analytics?: boolean }>)?.detail;
+      if (detail?.analytics === false) {
+        hasTrackedLandingRef.current = false;
+        hasTrackedMapLoadedRef.current = false;
+        viewedCardIdsRef.current.clear();
+        openedDetailIdsRef.current.clear();
+        unavailableNoticeIdsRef.current.clear();
+        lastClickedMarkerRef.current = null;
+        lastClickedDirectionsRef.current = null;
+        lastClickedPaymentRef.current = null;
+      } else if (e.type === ANALYTICS_SESSION_RESET_EVENT) {
+        // 로그인/로그아웃 경계 전환 시 이전 상태의 중복 방지 캐시 초기화
+        hasTrackedLandingRef.current = false;
+        hasTrackedMapLoadedRef.current = false;
+        viewedCardIdsRef.current.clear();
+        openedDetailIdsRef.current.clear();
+        unavailableNoticeIdsRef.current.clear();
+      }
+    };
+    window.addEventListener(ANALYTICS_CONSENT_CHANGED_EVENT, handleConsentChange);
+    window.addEventListener(ANALYTICS_SESSION_RESET_EVENT, handleConsentChange);
+    return () => {
+      window.removeEventListener(ANALYTICS_CONSENT_CHANGED_EVENT, handleConsentChange);
+      window.removeEventListener(ANALYTICS_SESSION_RESET_EVENT, handleConsentChange);
+    };
+  }, []);
 
   /**
    * Records landing_view once per component lifecycle.
    */
   const trackLandingView = useCallback(
     async (options?: { landingPath?: string; referrer?: string }): Promise<EventIngestResult | null> => {
+      if (!isAnalyticsAllowed()) {
+        return null;
+      }
       if (hasTrackedLandingRef.current) {
         return null;
       }
@@ -176,10 +257,13 @@ export function useEventTracker() {
 
   /**
    * Records map_loaded when Kakao Map finishes its initial rendering and tile loading.
-   * Deduplicated so subsequent panning/zooming does not re-emit map_loaded.
+   * Deduplicated so subsequent panning/zooming/StrictMode remounts do not re-emit map_loaded.
    */
   const trackMapLoaded = useCallback(
     async (input: TrackMapLoadedInput): Promise<EventIngestResult | null> => {
+      if (!isAnalyticsAllowed()) {
+        return null;
+      }
       if (hasTrackedMapLoadedRef.current) {
         return null;
       }
@@ -210,6 +294,9 @@ export function useEventTracker() {
    */
   const trackMarkerClicked = useCallback(
     async (input: TrackMarkerClickedInput): Promise<EventIngestResult | null> => {
+      if (!isAnalyticsAllowed()) {
+        return null;
+      }
       const now = Date.now();
       if (
         lastClickedMarkerRef.current &&
@@ -242,11 +329,14 @@ export function useEventTracker() {
   );
 
   /**
-   * Records restroom_card_viewed when a card is exposed to the user in the bottom sheet or list.
-   * Deduplicated per restroom ID so parent re-renders do not generate spurious exposures.
+   * Records restroom_card_viewed when a card is exposed to the user in the bottom sheet.
+   * Deduplicated per restroom ID so parent re-renders or StrictMode do not generate spurious exposures.
    */
   const trackCardViewed = useCallback(
     async (input: TrackCardViewedInput): Promise<EventIngestResult | null> => {
+      if (!isAnalyticsAllowed()) {
+        return null;
+      }
       if (viewedCardIdsRef.current.has(input.restroom.id)) {
         return null;
       }
@@ -275,9 +365,18 @@ export function useEventTracker() {
 
   /**
    * Records restroom_detail_opened when user visits /restrooms/[id].
+   * Deduplicated per restroom ID within component lifecycle to prevent StrictMode/re-render duplicates.
    */
   const trackDetailOpened = useCallback(
     async (input: TrackDetailOpenedInput): Promise<EventIngestResult | null> => {
+      if (!isAnalyticsAllowed()) {
+        return null;
+      }
+      if (openedDetailIdsRef.current.has(input.restroom.id)) {
+        return null;
+      }
+      openedDetailIdsRef.current.add(input.restroom.id);
+
       const pagePath =
         input.pagePath ?? (typeof window !== "undefined" ? window.location.pathname : `/restrooms/${input.restroom.id}`);
 
@@ -301,10 +400,24 @@ export function useEventTracker() {
 
   /**
    * Records directions_clicked when user clicks Kakao/Naver/Google navigation link.
-   * Dispatched non-blockingly before opening the external link.
+   * Deduplicated within 500ms for rapid double clicks on the same restroom + service.
    */
   const trackDirectionsClicked = useCallback(
     async (input: TrackDirectionsClickedInput): Promise<EventIngestResult | null> => {
+      if (!isAnalyticsAllowed()) {
+        return null;
+      }
+      const now = Date.now();
+      const dedupKey = `${input.restroom.id}:${input.service}`;
+      if (
+        lastClickedDirectionsRef.current &&
+        lastClickedDirectionsRef.current.key === dedupKey &&
+        now - lastClickedDirectionsRef.current.time < 500
+      ) {
+        return null;
+      }
+      lastClickedDirectionsRef.current = { key: dedupKey, time: now };
+
       const pagePath = input.pagePath ?? (typeof window !== "undefined" ? window.location.pathname : "/map");
 
       return trackEventSafe({
@@ -328,9 +441,23 @@ export function useEventTracker() {
 
   /**
    * Records payment_button_clicked when user clicks the deposit payment button on a partner restroom.
+   * Deduplicated within 500ms for rapid double clicks on the same restroom.
    */
   const trackPaymentButtonClicked = useCallback(
     async (input: TrackPaymentButtonClickedInput): Promise<EventIngestResult | null> => {
+      if (!isAnalyticsAllowed()) {
+        return null;
+      }
+      const now = Date.now();
+      if (
+        lastClickedPaymentRef.current &&
+        lastClickedPaymentRef.current.id === input.restroom.id &&
+        now - lastClickedPaymentRef.current.time < 500
+      ) {
+        return null;
+      }
+      lastClickedPaymentRef.current = { id: input.restroom.id, time: now };
+
       const pagePath = input.pagePath ?? (typeof window !== "undefined" ? window.location.pathname : "/map");
 
       return trackEventSafe({
@@ -357,6 +484,9 @@ export function useEventTracker() {
    */
   const trackPaymentUnavailableShown = useCallback(
     async (input: TrackPaymentUnavailableShownInput): Promise<EventIngestResult | null> => {
+      if (!isAnalyticsAllowed()) {
+        return null;
+      }
       if (unavailableNoticeIdsRef.current.has(input.restroom.id)) {
         return null;
       }

@@ -228,7 +228,7 @@ export function AdminReceiptsClient({
           data-testid="admin-receipt-detail-view"
           className="flex min-w-0 flex-col gap-3"
         >
-          <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center">
             <button
               type="button"
               data-testid="back-to-queue-button"
@@ -240,10 +240,6 @@ export function AdminReceiptsClient({
             >
               ← 심사 대기열 목록
             </button>
-
-            <span className="font-mono text-[11px] text-slate-500">
-              ID: {selectedReceipt.id.slice(0, 8)}...
-            </span>
           </div>
 
           <AdminReceiptImageViewer

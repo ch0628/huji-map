@@ -48,15 +48,21 @@ export function hashToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
+export interface IngestClientEventOptions {
+  requestSessionToken?: string | null;
+  enforceAnonymousSessionToken?: boolean;
+}
+
 /**
  * Ingests a client-side event.
- * Ensures user_id authenticity, session ownership, event allowlist, rate limiting, and duplicate handling.
+ * Ensures user_id authenticity (server-verified only), session ownership, event allowlist, rate limiting, and duplicate handling.
  */
 export async function ingestClientEvent(
   supabase: SupabaseClient<any>,
   rawPayload: unknown,
   authUserId: string | null = null,
-  clientIp: string | null = null
+  clientIp: string | null = null,
+  options?: IngestClientEventOptions
 ): Promise<EventIngestResult> {
   // 1. Zod schema validation
   const parseResult = clientEventPayloadSchema.safeParse(rawPayload);
@@ -106,12 +112,13 @@ export async function ingestClientEvent(
     );
   }
 
-  // 4. [보안 선행 검증] 세션 소유권 및 is_test 권위적 상태 검증
+  // 4. [보안 선행 검증] 세션 소유권, 분석 동의 철회 여부 및 is_test 권위적 상태 검증
   let resolvedIsTest = false;
+  let resolvedBrowserId = data.browserId ?? null;
   if (data.sessionId) {
     const { data: session, error: sessionErr } = await supabase
       .from("visitor_sessions")
-      .select("id, browser_id, user_id, is_test")
+      .select("id, browser_id, user_id, session_token_hash, is_test")
       .eq("id", data.sessionId)
       .maybeSingle();
 
@@ -137,6 +144,15 @@ export async function ingestClientEvent(
       );
     }
 
+    // 비로그인 세션에 로그인 이벤트 혼합 차단 (로그인 전·후 행동 자동 결합 방지)
+    if (!session.user_id && effectiveUserId) {
+      throw new EventError(
+        "SESSION_OWNERSHIP_MISMATCH",
+        "비로그인 방문 세션에는 로그인 사용자 이벤트를 기록할 수 없습니다.",
+        403
+      );
+    }
+
     // 브라우저 식별자 불일치 차단
     if (session.browser_id && data.browserId && session.browser_id !== data.browserId) {
       throw new EventError(
@@ -146,6 +162,24 @@ export async function ingestClientEvent(
       );
     }
 
+    // 익명 세션 소유 토큰 검증 (HTTP API 경로에서 세션 탈취 방지)
+    if (
+      options?.enforceAnonymousSessionToken &&
+      !effectiveUserId &&
+      session.session_token_hash
+    ) {
+      const providedToken = options.requestSessionToken;
+      if (!providedToken || hashToken(providedToken) !== session.session_token_hash) {
+        throw new EventError(
+          "SESSION_OWNERSHIP_MISMATCH",
+          "익명 방문 세션의 소유권 검증에 실패했습니다.",
+          403
+        );
+      }
+    }
+
+    resolvedBrowserId = resolvedBrowserId ?? session.browser_id ?? null;
+
     // is_test는 세션의 권위적 상태 계승 (클라이언트 임의 조작 방지)
     resolvedIsTest = Boolean(session.is_test);
   } else {
@@ -153,6 +187,50 @@ export async function ingestClientEvent(
     // 프로덕션 환경에서는 클라이언트 임의의 isTest=true 지정으로 인한 분석 누락 방지 (기본 false 강제)
     const isEnvTest = process.env.NODE_ENV === "test" || process.env.NEXT_PUBLIC_APP_ENV === "test";
     resolvedIsTest = isEnvTest ? Boolean(data.isTest ?? true) : false;
+  }
+
+  // 4-B. 서버 측 선택적 분석 동의 철회 여부 확인 (브라우저 및 인증 사용자 기준)
+  const checkConsentSubjectWithdrawn = async (
+    column: "browser_id" | "user_id",
+    value: string
+  ) => {
+    const consentTable = supabase.from("consent_records") as any;
+    if (!consentTable || typeof consentTable.select !== "function") return;
+    const baseQuery = consentTable
+      .select("accepted, withdrawn_at, recorded_at")
+      .eq("consent_type", "analytics");
+    if (!baseQuery || typeof baseQuery.eq !== "function") return;
+    const filteredQuery = baseQuery.eq(column, value);
+    if (!filteredQuery || typeof filteredQuery.order !== "function") return;
+
+    const { data: latestConsent } = await filteredQuery
+      .order("recorded_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (
+      latestConsent &&
+      (latestConsent.accepted === false || latestConsent.withdrawn_at !== null)
+    ) {
+      throw new EventError(
+        "ANALYTICS_CONSENT_WITHDRAWN",
+        "분석 동의가 철회되어 이벤트를 수집할 수 없습니다.",
+        403
+      );
+    }
+  };
+
+  if (resolvedBrowserId || effectiveUserId) {
+    try {
+      if (resolvedBrowserId) {
+        await checkConsentSubjectWithdrawn("browser_id", resolvedBrowserId);
+      }
+      if (effectiveUserId) {
+        await checkConsentSubjectWithdrawn("user_id", effectiveUserId);
+      }
+    } catch (err) {
+      if (err instanceof EventError) throw err;
+    }
   }
 
   // 5. Try atomic RPC if available in Supabase
@@ -186,6 +264,7 @@ export async function ingestClientEvent(
           receivedAt: rpcRes.received_at ?? new Date().toISOString(),
           deduplicated: Boolean(rpcRes.deduplicated),
           id: rpcRes.id,
+          isAuthenticated: Boolean(effectiveUserId),
         };
       }
 
@@ -261,6 +340,7 @@ export async function ingestClientEvent(
         receivedAt: existing.received_at,
         deduplicated: true,
         id: existing.id,
+        isAuthenticated: Boolean(effectiveUserId),
       };
     } else {
       // Conflict: same client_event_id with differing event payload
@@ -306,6 +386,7 @@ export async function ingestClientEvent(
         clientEventId: (data.clientEventId ?? "") as string,
         receivedAt: now,
         deduplicated: true,
+        isAuthenticated: Boolean(effectiveUserId),
       };
     }
     throw new EventError("EVENT_INSERT_ERROR", insertError.message, 500);
@@ -316,6 +397,7 @@ export async function ingestClientEvent(
     receivedAt: inserted.received_at,
     deduplicated: false,
     id: inserted.id,
+    isAuthenticated: Boolean(effectiveUserId),
   };
 }
 
@@ -334,6 +416,15 @@ export async function createVisitorSession(
   }
 
   const data: ValidatedVisitorSessionInput = parseResult.data;
+
+  // Enforce explicit opt-in analytics consent on server session creation
+  if (!data.consent || data.consent.analytics !== true) {
+    throw new EventError(
+      "ANALYTICS_CONSENT_REQUIRED",
+      "선택적 분석 동의(analytics=true)가 있어야 방문 세션을 기록할 수 있습니다.",
+      403
+    );
+  }
 
   // Generate cryptographically secure session token and hash for ownership verification
   const sessionToken = crypto.randomBytes(32).toString("hex");
@@ -398,6 +489,7 @@ export async function createVisitorSession(
     sessionToken,
     startedAt: created.started_at,
     isTest: created.is_test,
+    isAuthenticated: Boolean(authUserId),
   };
 }
 

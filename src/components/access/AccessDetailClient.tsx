@@ -8,7 +8,6 @@ import VisitConfirmationForm, {
   type VisitConfirmationFormProps,
 } from "./VisitConfirmationForm";
 import {
-  getPaymentQualificationLabel,
   getRefundStatusBadgeLabel,
   resolveEffectiveAccessStatus,
   type CustomerAccessDetail,
@@ -169,14 +168,24 @@ export default function AccessDetailClient({
     );
   }
 
-  const { session, restroom, policy, order, refund, visitConfirmations } =
-    detail;
+  const {
+    session,
+    restroom,
+    policy,
+    order,
+    refund,
+    visitConfirmations,
+    latestReceipt,
+  } = detail;
   const effectiveStatus = resolveEffectiveAccessStatus(session, refund);
   const partnerName =
     restroom?.business_name || restroom?.name || "제휴 매장 화장실";
   const restroomName = restroom?.name || "제휴 화장실";
-  const paymentQualification = getPaymentQualificationLabel(order, refund);
   const refundBadge = getRefundStatusBadgeLabel(refund?.status);
+
+  const isReceiptAlreadySubmitted =
+    latestReceipt &&
+    latestReceipt.submissionStatus !== "resubmission_requested";
 
   return (
     <div
@@ -200,21 +209,12 @@ export default function AccessDetailClient({
             data-testid="go-to-restroom-detail-link"
             className="inline-flex min-h-[44px] items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
           >
-            매장/화장실 정보 보기
+            화장실 정보
           </Link>
         )}
       </div>
 
-      {/* 테스트 모드 고지 배너 (docs/05_SCREEN_SPEC.md 필수) */}
-      <div
-        data-testid="detail-test-mode-watermark"
-        className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200"
-      >
-        <span className="font-bold">⚠️ 테스트 결제 · 실제 돈은 청구되지 않음:</span>{" "}
-        이 이용권은 PG 테스트 모드로 발급되었습니다.
-      </div>
-
-      {/* 1. 이용권 기본 정보 및 자격 확인 상태 카드 */}
+      {/* 1~3. 화장실 이름·주소, 현재 이용 상태, 이용권 유효기한 */}
       <section
         data-testid="access-qualification-card"
         className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900"
@@ -230,7 +230,7 @@ export default function AccessDetailClient({
           {refundBadge && (
             <span
               data-testid="detail-refund-badge"
-              className="rounded-md bg-rose-100 px-2 py-0.5 text-[11px] font-bold text-rose-800 dark:bg-rose-950/70 dark:text-rose-200"
+              className="shrink-0 whitespace-nowrap rounded-md bg-rose-100 px-2 py-0.5 text-[11px] font-bold text-rose-800 dark:bg-rose-950/70 dark:text-rose-200"
             >
               {refundBadge}
             </span>
@@ -239,41 +239,29 @@ export default function AccessDetailClient({
 
         <p
           data-testid="detail-partner-name"
-          className="text-xs font-bold text-purple-700 dark:text-purple-400"
+          className="text-xs font-semibold text-slate-600 dark:text-slate-300 break-keep"
         >
           🏬 {partnerName}
         </p>
         <h1
           data-testid="detail-restroom-name"
-          className="mt-0.5 text-lg font-bold text-slate-900 dark:text-white break-words"
+          className="mt-0.5 text-lg font-bold text-slate-900 dark:text-white break-keep break-words"
         >
           {restroomName}
         </h1>
         {restroom && (
-          <p className="mt-1 text-xs text-slate-600 dark:text-slate-400 break-words">
+          <p className="mt-1 text-xs text-slate-600 dark:text-slate-400 break-keep break-words">
             📍 {restroom.road_address}
             {restroom.address_detail ? ` ${restroom.address_detail}` : ""}
             {restroom.floor ? ` (${restroom.floor})` : ""}
           </p>
         )}
 
-        {/* 자격 확인 및 유효기한 상세 */}
-        <div className="mt-4 rounded-xl bg-slate-50 p-3.5 text-xs space-y-2 dark:bg-slate-800/60">
+        {/* 유효기한 및 1회성 테스트 결제 안내 */}
+        <div className="mt-4 rounded-xl bg-slate-50 p-3 text-xs space-y-1.5 dark:bg-slate-800/60">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-slate-500 dark:text-slate-400">
-              결제 후 자격 상태
-            </span>
-            <span
-              data-testid="detail-payment-qualification"
-              className="font-bold text-slate-900 dark:text-white text-right"
-            >
-              {paymentQualification}
-            </span>
-          </div>
-
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-slate-500 dark:text-slate-400">
-              이용권 유효기한
+            <span className="text-slate-500 dark:text-slate-400 shrink-0">
+              유효기한
             </span>
             <span
               data-testid="detail-expires-at"
@@ -282,29 +270,12 @@ export default function AccessDetailClient({
               {new Date(session.expires_at).toLocaleString("ko-KR")}
             </span>
           </div>
-
-          {order && (
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-slate-500 dark:text-slate-400">주문 번호</span>
-              <span
-                data-testid="detail-order-id"
-                className="font-mono text-[11px] text-slate-700 dark:text-slate-300"
-              >
-                {order.order_id}
-              </span>
-            </div>
-          )}
-
-          {session.code_revealed_at && (
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-slate-500 dark:text-slate-400">
-                최초 PIN 열람 시각
-              </span>
-              <span className="text-[11px] text-slate-700 dark:text-slate-300">
-                {new Date(session.code_revealed_at).toLocaleString("ko-KR")}
-              </span>
-            </div>
-          )}
+          <p
+            data-testid="detail-test-mode-watermark"
+            className="text-[11px] text-amber-800 dark:text-amber-300 pt-0.5 break-keep"
+          >
+            ⚠️ 테스트 결제 ({order ? `${order.amount_krw.toLocaleString()}원` : "보증금"}) · 실제 금액은 청구되지 않습니다.
+          </p>
         </div>
       </section>
 
@@ -361,25 +332,64 @@ export default function AccessDetailClient({
         }}
       />
 
-      {/* 4. 영수증 수동 심사 및 환급 규정 안내 */}
+      {/* 6. 영수증 제출 및 환급 상태 */}
       <section
         data-testid="detail-refund-policy-box"
-        className="rounded-2xl border border-slate-200 bg-white p-5 text-xs text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300"
+        className="rounded-2xl border border-slate-200 bg-white p-5 text-xs text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 space-y-3"
       >
-        <h2 className="text-sm font-bold text-slate-900 dark:text-white mb-2">
-          🧾 보증금 환급 및 영수증 심사 안내
-        </h2>
-        <ul className="list-disc pl-4 space-y-1 text-[11px] leading-relaxed">
-          <li>
-            제휴 매장에서 실제 상품을 구매한 영수증 사진을 제출하면{" "}
-            <strong>관리자 수동 심사 승인 후</strong> 테스트 결제 취소(전액 환급)가
-            진행됩니다. (OCR 자동 승인 없음)
-          </li>
-          <li>
-            영수증 제출 기한(테스트 기본값):{" "}
-            <strong>{policy?.receipt_window_hours ?? 24}시간 이내</strong>
-          </li>
-        </ul>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-sm font-bold text-slate-900 dark:text-white break-keep">
+            🧾 영수증 제출 및 보증금 환급
+          </h2>
+        </div>
+
+        {refund?.status === "succeeded" ? (
+          <p className="rounded-xl bg-emerald-50 p-3 font-semibold text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
+            ✓ 보증금 {refund.amount_krw.toLocaleString()}원 환급이 완료되었습니다.
+          </p>
+        ) : isReceiptAlreadySubmitted ? (
+          <div className="space-y-2.5">
+            <div className="rounded-xl bg-blue-50 p-3 text-blue-900 dark:bg-blue-950/40 dark:text-blue-200">
+              <p className="font-semibold">
+                {latestReceipt?.submissionStatus === "approved"
+                  ? "✓ 영수증이 승인되어 환급이 진행 중입니다."
+                  : latestReceipt?.submissionStatus === "rejected"
+                  ? "영수증이 반려되었습니다."
+                  : "영수증을 확인하고 있습니다."}
+              </p>
+            </div>
+            <Link
+              href="/my/receipts"
+              data-testid="access-detail-receipts-link"
+              className="flex min-h-[44px] w-full items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-xs font-bold text-slate-800 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+            >
+              제출한 영수증 확인하기
+            </Link>
+          </div>
+        ) : order?.status === "approved" ? (
+          <div className="space-y-2.5">
+            <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-400 break-keep">
+              {latestReceipt?.submissionStatus === "resubmission_requested"
+                ? "영수증 재제출이 요청되었습니다. 새로운 영수증 사진을 올려주세요."
+                : `매장에서 구매한 영수증 사진을 제출하고 승인되면 보증금이 환급됩니다. (${
+                    policy?.receipt_window_hours ?? 24
+                  }시간 이내)`}
+            </p>
+            <Link
+              href={`/my/receipts?accessSessionId=${encodeURIComponent(session.id)}`}
+              data-testid="access-detail-receipts-link"
+              className="flex min-h-[44px] w-full items-center justify-center rounded-xl bg-purple-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-purple-700"
+            >
+              {latestReceipt?.submissionStatus === "resubmission_requested"
+                ? "영수증 다시 제출하기"
+                : "영수증 제출하러 가기"}
+            </Link>
+          </div>
+        ) : (
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            결제 완료 후 영수증을 제출해 보증금을 환급받을 수 있습니다.
+          </p>
+        )}
       </section>
     </div>
   );

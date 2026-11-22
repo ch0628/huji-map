@@ -375,10 +375,10 @@ describe("TASK 22: Toss Payments UI & Mobile Checkout Integration Tests", () => 
       expect(screen.getByTestId("deposit-amount-display").textContent).toContain(
         "1,000원"
       );
-      expect(screen.getByText("영수증 환급 조건:")).toBeTruthy();
       expect(
-        screen.getByText(/제휴 매장 실제 이용\(구매\) 영수증 사진을 제출한 후/)
+        screen.getByText(/매장에서 구매한 영수증을 제출하고 관리자 승인을 받으면 보증금이 환급됩니다\./)
       ).toBeTruthy();
+      expect(screen.getByTestId("modal-policy-details")).toBeTruthy();
       expect(screen.getByText("자동 환급 불가:")).toBeTruthy();
       expect(
         screen.getByText("도어락 비밀번호:")
@@ -580,11 +580,14 @@ describe("TASK 22: Toss Payments UI & Mobile Checkout Integration Tests", () => 
         "1,000원 (테스트)"
       );
       expect(screen.getByTestId("confirmed-session-status").textContent).toContain(
-        "이용권 활성화 (authorized)"
+        "이용권 활성화"
+      );
+      expect(screen.getByTestId("reveal-pin-btn").textContent).toContain(
+        "비밀번호 확인하기"
       );
       expect(
-        screen.getByText(/도어락 비밀번호 복호화 및 열람 기능은 후속 단계\(TASK 23~25\)에서 제공됩니다/)
-      ).toBeTruthy();
+        screen.queryByText(/TASK 23~25에서 제공됩니다/)
+      ).toBeNull();
     });
 
     it("handles amount tampering / server error by showing error and NO access session", async () => {
