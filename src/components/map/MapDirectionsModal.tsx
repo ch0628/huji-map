@@ -124,6 +124,14 @@ export default function MapDirectionsModal({
         <p className="py-3 text-xs text-slate-600 dark:text-slate-300">
           원하시는 지도 서비스를 선택하시면 길찾기 화면으로 바로 연결됩니다.
         </p>
+        {target.type === "public" && (
+          <p
+            data-testid="directions-public-coord-notice"
+            className="mb-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-600 dark:bg-slate-800/70 dark:text-slate-300"
+          >
+            지자체 공식 데이터 좌표 기준 위치이며, 실제 화장실 출입구 위치와 다를 수 있습니다.
+          </p>
+        )}
 
         <div className="space-y-2.5">
           {/* 카카오맵 */}

@@ -8,9 +8,11 @@ import { PublicRestroomPhotoGallery } from "@/components/restroom/RestroomPhotoM
 import {
   CompactOperatingHours,
   OperatingStatusBadge,
+  PublicRestroomUnifiedSections,
   RestroomFacilitiesCard,
   evaluateOperatingStatus,
 } from "@/components/restroom/restroom-detail-shared";
+import { normalizePublicRestroomMetadata } from "@/lib/restrooms/public-metadata";
 import { useEventTracker } from "@/lib/events/hooks";
 
 export interface PublicRestroomDetailViewProps {
@@ -34,6 +36,11 @@ export default function PublicRestroomDetailView({
   const operatingStatus = useMemo(
     () => evaluateOperatingStatus(restroom.hours, restroom.hour_exceptions),
     [restroom.hours, restroom.hour_exceptions]
+  );
+
+  const publicMetadata = useMemo(
+    () => (!isPartner ? normalizePublicRestroomMetadata(restroom) : null),
+    [isPartner, restroom]
   );
 
   const { trackDetailOpened, trackDirectionsClicked } = useEventTracker();
@@ -108,9 +115,10 @@ export default function PublicRestroomDetailView({
         <CompactOperatingHours
           hours={restroom.hours ?? []}
           todayText={operatingStatus.todayText}
+          officialOperating={publicMetadata?.operating}
         />
 
-        {restroom.description && (
+        {isPartner && restroom.description && (
           <p className="mt-3 rounded-xl bg-slate-50 p-3 text-xs leading-relaxed text-slate-700 dark:bg-slate-800/50 dark:text-slate-300">
             {restroom.description}
           </p>
@@ -158,16 +166,15 @@ export default function PublicRestroomDetailView({
           </div>
         )
       ) : (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-900 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-100">
-          <p className="font-bold text-sm">✨ 무료 공공 화장실</p>
-          <p className="mt-1 leading-relaxed text-slate-700 dark:text-slate-300">
-            회원가입이나 보증금 없이 누구나 무료로 이용할 수 있어요.
-          </p>
-        </div>
+        <PublicRestroomUnifiedSections
+          restroom={restroom}
+          metadata={publicMetadata!}
+          showLegacyDisclosure={true}
+        />
       )}
 
-      {/* 기타 시설 정보 */}
-      <RestroomFacilitiesCard restroom={restroom} />
+      {/* 제휴 기타 시설 정보 */}
+      {isPartner && <RestroomFacilitiesCard restroom={restroom} />}
 
       {/* 길찾기 모달 */}
       <MapDirectionsModal

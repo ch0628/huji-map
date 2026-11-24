@@ -58,3 +58,12 @@ npx tsx scripts/prepare-remote-suwon-migration.ts --batch-size 250 --live --conf
 2. `SELECT count(*) FROM public.restroom_access_policies WHERE access_mode = 'free' AND is_active = true;` → 적재된 화장실 건수와 1:1 일치 확인.
 3. `SELECT count(*) FROM public.list_nearby_public_restrooms(37.2636, 127.0286, 400, 'public', 100, 0);` → 수원시청 반경 400m 거리순 조회 정상 확인.
 4. `ANALYZE public.restrooms; ANALYZE public.restroom_access_policies;` 실행 후 쉘 환경변수(`REMOTE_SUPABASE_SECRET_KEY`) 즉시 제거.
+
+---
+
+## 6. 전국 확장 2단계 원칙 (확정 결정)
+
+- **전국 100% 매칭 목표 제외**: 주소 매칭(`CANDIDATE`)과 실제 시설 위치 검증(`VERIFIED`)을 엄격히 구분하며, 독립 공식 시설 좌표와 일관성·단순시설 검증을 통과한 **`VERIFIED`만 선별 공개**한다. (`CANDIDATE`·`REVIEW_REQUIRED` 비공개 유지)
+- **기존 수원 공식 좌표 보호**: 기존 원격 수원 502건은 자동 덮어쓰기·삭제하지 않으며, 탐지된 이상치(`e타운1빌딩` 등)는 별도 검수 절차로 처리한다.
+- **시군구 단위 단계적 확대**: 4만 건 일괄 적재 금지. 1차 확대 추천 시군구(경기도 부천시·광명시·파주시 `VERIFIED` 587건)부터 DRY-RUN 검증 후 진행한다.
+- **별도 승인 및 약관 확인 필수**: 원격 데이터 적재(`--live --confirm`), 신규 스키마 마이그레이션(`20261124000000_restroom_coordinate_verification.sql`), 행안부 주소정보 DB 유래 좌표 공개는 이용허락 조건 확인 및 사용자 명시적 승인 전까지 실행하지 않는다.

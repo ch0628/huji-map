@@ -5,6 +5,7 @@ import { createSignedPhotoReadUrlMap } from "./photo-urls";
 import type {
   AccessMode,
   PublicBusinessInfo,
+  PublicDataSourceSummary,
   PublicRestroomAccessPolicy,
   PublicRestroomDetail,
   PublicRestroomHour,
@@ -62,7 +63,86 @@ export interface SearchPublicRestroomsResult {
 }
 
 const PUBLIC_RESTROOM_SUMMARY_COLUMNS =
-  "id, type, name, road_address, address_detail, latitude, longitude, access_method, gender_type, wheelchair_accessible, baby_changing_available, sanitary_products_available, last_verified_at, business_id";
+  "id, type, name, road_address, address_detail, latitude, longitude, access_method, gender_type, wheelchair_accessible, baby_changing_available, sanitary_products_available, last_verified_at, business_id, coordinate_source, coordinate_type, coordinate_verification_status";
+
+const PUBLIC_APPROVED_OFFICIAL_SOURCES = new Set<string>([
+  "seoul_public_toilet_info",
+  "seoul_metro_2026",
+  "incheon_district_public_toilet",
+  "admin_manual",
+]);
+
+const BLOCKED_COORDINATE_SOURCES = new Set<string>([
+  "kakao_geocode",
+  "mois_address_nav_db",
+  "mois_address_summary_db",
+]);
+
+const BLOCKED_COORDINATE_TYPES = new Set<string>([
+  "building_centroid",
+  "main_entrance",
+  "complex_centroid_mean",
+  "geocoded",
+]);
+
+/**
+ * Runtime/service-layer coordinate exposure guard aligned with
+ * `public.is_restroom_coordinate_publicly_allowed` in migration `20261125000000`.
+ *
+ * Ensures unconfirmed MOIS coordinates, Kakao geocoding coordinates, and newly
+ * imported rows with `publication_status = 'published'` alone cannot leak if
+ * verification metadata is unverified or non-official, while keeping legacy Suwon
+ * 502 public rows and existing partner rows intact.
+ */
+export function isRestroomCoordinatePubliclyAllowed(row: {
+  type?: string | null;
+  coordinate_source?: string | null;
+  coordinate_type?: string | null;
+  coordinate_verification_status?: string | null;
+}): boolean {
+  const src = row.coordinate_source;
+  const ctype = row.coordinate_type;
+  const vstatus = row.coordinate_verification_status;
+
+  if (typeof src === "string" && BLOCKED_COORDINATE_SOURCES.has(src)) {
+    return false;
+  }
+  if (typeof ctype === "string" && BLOCKED_COORDINATE_TYPES.has(ctype)) {
+    return false;
+  }
+
+  if (row.type === "partner") {
+    return true;
+  }
+
+  if (row.type !== "public") {
+    return false;
+  }
+
+  // Legacy unit-test mocks or pre-20261125 RPC responses that omit all three
+  // metadata keys fall through safely; real DB selects always include these keys
+  // (as string or null) and SQL RPC enforces the predicate directly in DB.
+  const hasMetadataKeys =
+    "coordinate_source" in row ||
+    "coordinate_type" in row ||
+    "coordinate_verification_status" in row;
+  if (!hasMetadataKeys) {
+    return true;
+  }
+
+  if (src === "gg_publtolt_15011425") {
+    return (
+      (ctype == null || ctype === "facility_official") &&
+      (vstatus == null || vstatus === "VERIFIED")
+    );
+  }
+
+  if (typeof src === "string" && PUBLIC_APPROVED_OFFICIAL_SOURCES.has(src)) {
+    return ctype === "facility_official" && vstatus === "VERIFIED";
+  }
+
+  return false;
+}
 
 function resolveBusinessClient(
   callerClient: SupabaseClient<Database>,
@@ -542,7 +622,8 @@ async function hydratePublicRestroomSummaries(
     (await resolveApprovedBusinessMap(supabase, partnerBizIds, options)) ??
     new Map<string, { id: string; name: string }>();
 
-  // Filter out unpublished rows, invalid coordinates, and partner restrooms whose business is NOT approved
+  // Filter out unpublished rows, invalid coordinates, unverified/prohibited coordinate sources,
+  // and partner restrooms whose business is NOT approved
   const validRows = rows.filter((r: any) => {
     if (
       r.publication_status !== undefined &&
@@ -551,6 +632,9 @@ async function hydratePublicRestroomSummaries(
       return false;
     }
     if (!hasValidCoordinates(r.latitude, r.longitude)) {
+      return false;
+    }
+    if (!isRestroomCoordinatePubliclyAllowed(r)) {
       return false;
     }
     if (r.type === "public") return true;
@@ -784,7 +868,7 @@ export async function getPublicRestroomDetail(
   const { data: restroom, error } = await (supabase as any)
     .from("restrooms")
     .select(
-      "id, type, name, description, road_address, address_detail, latitude, longitude, floor, entrance_instructions, gender_type, wheelchair_accessible, baby_changing_available, sanitary_products_available, access_method, publication_status, last_verified_at, business_id, created_at, updated_at"
+      "id, type, name, description, road_address, address_detail, latitude, longitude, floor, entrance_instructions, gender_type, wheelchair_accessible, baby_changing_available, sanitary_products_available, access_method, publication_status, last_verified_at, source_id, coordinate_source_id, business_id, coordinate_source, coordinate_type, coordinate_verification_status, created_at, updated_at"
     )
     .eq("id", id)
     .eq("publication_status", "published")
@@ -802,6 +886,10 @@ export async function getPublicRestroomDetail(
   }
 
   if (!hasValidCoordinates(restroom.latitude, restroom.longitude)) {
+    return null;
+  }
+
+  if (!isRestroomCoordinatePubliclyAllowed(restroom)) {
     return null;
   }
 
@@ -937,6 +1025,36 @@ export async function getPublicRestroomDetail(
     image_url: signedDetailPhotoMap.get(p.storage_path) ?? null,
   }));
 
+  let dataSource: PublicDataSourceSummary | null = null;
+  const targetSourceId = restroom.source_id || restroom.coordinate_source_id || null;
+  if (restroom.type === "public" && targetSourceId) {
+    try {
+      const { data: srcData } = await (supabase as any)
+        .from("public_data_sources")
+        .select(
+          "id, provider_name, dataset_name, source_url, license_name, license_url, attribution_text, last_synced_at"
+        )
+        .eq("id", targetSourceId)
+        .maybeSingle();
+
+      if (srcData && srcData.id) {
+        dataSource = {
+          id: srcData.id,
+          provider_name: srcData.provider_name,
+          dataset_name: srcData.dataset_name,
+          source_url: srcData.source_url,
+          license_name: srcData.license_name ?? null,
+          license_url: srcData.license_url ?? null,
+          attribution_text: srcData.attribution_text ?? null,
+          last_synced_at: srcData.last_synced_at ?? null,
+        };
+      }
+    } catch {
+      // Optional public metadata lookup; degrade gracefully in mock/offline contexts
+      dataSource = null;
+    }
+  }
+
   return {
     id: restroom.id,
     type: restroom.type,
@@ -954,6 +1072,9 @@ export async function getPublicRestroomDetail(
     sanitary_products_available: restroom.sanitary_products_available,
     access_method: restroom.access_method,
     last_verified_at: restroom.last_verified_at,
+    source_id: restroom.source_id ?? null,
+    coordinate_source: restroom.coordinate_source ?? null,
+    data_source: dataSource,
     business_id: restroom.business_id,
     business: publicBusiness,
     hours,

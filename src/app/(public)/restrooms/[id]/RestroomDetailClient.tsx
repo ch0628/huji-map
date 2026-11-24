@@ -11,9 +11,11 @@ import { PublicRestroomPhotoGallery } from "@/components/restroom/RestroomPhotoM
 import {
   CompactOperatingHours,
   OperatingStatusBadge,
+  PublicRestroomUnifiedSections,
   RestroomFacilitiesCard,
   evaluateOperatingStatus,
 } from "@/components/restroom/restroom-detail-shared";
+import { normalizePublicRestroomMetadata } from "@/lib/restrooms/public-metadata";
 import { useVisitorSession, useEventTracker } from "@/lib/events/hooks";
 import {
   ANALYTICS_CONSENT_CHANGED_EVENT,
@@ -64,6 +66,11 @@ export default function RestroomDetailClient({
   const operatingStatus = useMemo(
     () => evaluateOperatingStatus(restroom.hours, restroom.hour_exceptions),
     [restroom.hours, restroom.hour_exceptions]
+  );
+
+  const publicMetadata = useMemo(
+    () => (!isPartner ? normalizePublicRestroomMetadata(restroom) : null),
+    [isPartner, restroom]
   );
 
   useVisitorSession({ isAuthenticated: Boolean(currentUser) });
@@ -158,9 +165,10 @@ export default function RestroomDetailClient({
         <CompactOperatingHours
           hours={restroom.hours ?? []}
           todayText={operatingStatus.todayText}
+          officialOperating={publicMetadata?.operating}
         />
 
-        {restroom.description && (
+        {isPartner && restroom.description && (
           <p className="mt-3 rounded-xl bg-slate-50 p-3 text-xs leading-relaxed text-slate-700 dark:bg-slate-800/50 dark:text-slate-300">
             {restroom.description}
           </p>
@@ -209,7 +217,7 @@ export default function RestroomDetailClient({
         </div>
       </div>
 
-      {/* 5. 간단한 보증금/이용 안내 */}
+      {/* 5. 간단한 보증금/이용 안내 & 공공 통합 섹션 (3~6) */}
       {isPartner ? (
         policyMode === "free" ? (
           <div
@@ -260,12 +268,11 @@ export default function RestroomDetailClient({
           </div>
         )
       ) : (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-900 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-100">
-          <p className="font-bold text-sm">✨ 무료 공공 화장실</p>
-          <p className="mt-1 leading-relaxed text-slate-700 dark:text-slate-300">
-            회원가입이나 보증금 없이 누구나 무료로 이용할 수 있어요.
-          </p>
-        </div>
+        <PublicRestroomUnifiedSections
+          restroom={restroom}
+          metadata={publicMetadata!}
+          showLegacyDisclosure={false}
+        />
       )}
 
       {/* 6. 이용 조건 및 상세 규정 (필요한 경우 펼쳐보기) */}
@@ -316,8 +323,8 @@ export default function RestroomDetailClient({
         </details>
       )}
 
-      {/* 7. 기타 시설 정보 */}
-      <RestroomFacilitiesCard restroom={restroom} />
+      {/* 7. 제휴 화장실 기타 시설 정보 (공공 화장실은 PublicRestroomUnifiedSections 내 통합) */}
+      {isPartner && <RestroomFacilitiesCard restroom={restroom} />}
 
       {/* 길찾기 모달 */}
       <MapDirectionsModal

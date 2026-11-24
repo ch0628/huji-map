@@ -3,6 +3,7 @@
 import React from "react";
 import Link from "next/link";
 import { formatDistance } from "@/lib/maps/geo";
+import { resolveAmenityDisplay } from "@/lib/restrooms/public-metadata";
 import type {
   PublicRestroomSummary,
   AccessMethod,
@@ -32,7 +33,7 @@ const GENDER_LABELS: Record<GenderType, string> = {
 };
 
 const ACCESS_METHOD_LABELS: Record<AccessMethod, string> = {
-  open: "상시 개방",
+  open: "개방형 출입",
   ask_staff: "직원 문의",
   pin: "도어락 비밀번호",
 };
@@ -50,6 +51,11 @@ export default function PublicRestroomCard({
   distanceMeters,
 }: PublicRestroomCardProps) {
   const isPartner = restroom.type === "partner";
+  const wheelchairDisplay = resolveAmenityDisplay(restroom.wheelchair_accessible, {
+    available: "휠체어 이용 가능",
+    unavailable: "휠체어 진입 어려움",
+    unknown: "휠체어 정보 미확인",
+  });
 
   const handleCardClick = (e: React.MouseEvent) => {
     // 버튼이나 링크 클릭 시 카드 클릭 이벤트 전파 방지
@@ -187,13 +193,24 @@ export default function PublicRestroomCard({
             </div>
           )
         ) : (
-          <div className="flex items-center justify-between font-medium">
-            <span className="text-blue-700 dark:text-blue-300">
-              ✨ 누구나 무료 이용
-            </span>
-            <span className="font-bold text-blue-900 dark:text-blue-200">
-              무료
-            </span>
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center justify-between font-medium">
+              <span className="text-blue-700 dark:text-blue-300">
+                ✨ 누구나 무료 이용
+              </span>
+              <span className="font-bold text-blue-900 dark:text-blue-200">
+                무료
+              </span>
+            </div>
+            <p
+              data-testid="public-official-guidance-note"
+              className="text-[11px] text-slate-500 dark:text-slate-400"
+            >
+              공식 공공데이터 기준 · 현장 확인 미완료
+              {restroom.last_verified_at
+                ? ` · 기준일 ${restroom.last_verified_at.slice(0, 10)}`
+                : ""}
+            </p>
           </div>
         )}
       </div>
@@ -211,29 +228,24 @@ export default function PublicRestroomCard({
         </span>
 
         {/* 편의 시설 */}
-        {restroom.wheelchair_accessible === true && (
+        {wheelchairDisplay.state === "available" && (
           <span className="rounded bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
-            ♿ 휠체어 이용 가능
+            ♿ {wheelchairDisplay.label}
           </span>
         )}
-        {restroom.wheelchair_accessible === false && (
+        {wheelchairDisplay.state !== "available" && (
           <span className="rounded bg-slate-50 px-2 py-0.5 text-slate-400 dark:bg-slate-800/40 dark:text-slate-500">
-            휠체어 진입 어려움
-          </span>
-        )}
-        {restroom.wheelchair_accessible === null && (
-          <span className="rounded bg-slate-50 px-2 py-0.5 text-slate-400 dark:bg-slate-800/40 dark:text-slate-500">
-            휠체어 정보 미확인
+            {wheelchairDisplay.label}
           </span>
         )}
 
-        {restroom.baby_changing_available && (
+        {restroom.baby_changing_available === true && (
           <span className="rounded bg-amber-50 px-2 py-0.5 font-medium text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
             👶 기저귀대
           </span>
         )}
 
-        {restroom.sanitary_products_available && (
+        {restroom.sanitary_products_available === true && (
           <span className="rounded bg-pink-50 px-2 py-0.5 font-medium text-pink-700 dark:bg-pink-950/60 dark:text-pink-300">
             🧴 위생용품
           </span>

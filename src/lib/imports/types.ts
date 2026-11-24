@@ -211,8 +211,8 @@ export const DEFAULT_SUWON_SOURCE_CONFIG: PublicSourceConfig = {
   datasetName: "공중화장실 현황",
   sourceUrl: "https://www.data.go.kr/data/15012892/fileData.do",
   apiEndpoint: null,
-  licenseName: "공공누리 제1유형: 출처표시",
-  licenseUrl: "https://www.kogl.or.kr/info/licenseType1.do",
+  licenseName: "이용허락범위 제한 없음",
+  licenseUrl: "https://www.data.go.kr/ugs/selectPortalPolicyView.do",
   attributionText: "출처: 공공데이터포털(data.go.kr) / 경기도 수원시",
 };
 

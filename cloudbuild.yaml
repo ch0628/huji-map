@@ -96,6 +96,11 @@ steps:
           ENV_VARS="$${ENV_VARS}@ALLOWED_APP_HOSTS=${_ALLOWED_APP_HOSTS}"
         fi
 
+        SECRETS_ARG="SUPABASE_SECRET_KEY=${_SECRET_SUPABASE_SECRET_KEY}:latest,PIN_ENCRYPTION_KEY_BASE64=${_SECRET_PIN_ENCRYPTION_KEY_BASE64}:latest"
+        if [[ -n "${_SECRET_TOSS_TEST_SECRET_KEY}" ]]; then
+          SECRETS_ARG="$${SECRETS_ARG},TOSS_TEST_SECRET_KEY=${_SECRET_TOSS_TEST_SECRET_KEY}:latest"
+        fi
+
         DEPLOY_ARGS=(
           run deploy "${_SERVICE_NAME}"
           "--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPOSITORY}/${_SERVICE_NAME}:${COMMIT_SHA}"
@@ -108,7 +113,7 @@ steps:
           "--max-instances=2"
           "--cpu-throttling"
           "--update-env-vars=^@^$${ENV_VARS}"
-          "--set-secrets=SUPABASE_SECRET_KEY=${_SECRET_SUPABASE_SECRET_KEY}:latest,TOSS_TEST_SECRET_KEY=${_SECRET_TOSS_TEST_SECRET_KEY}:latest,PIN_ENCRYPTION_KEY_BASE64=${_SECRET_PIN_ENCRYPTION_KEY_BASE64}:latest"
+          "--set-secrets=$${SECRETS_ARG}"
           "--quiet"
         )
 

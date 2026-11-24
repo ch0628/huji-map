@@ -1,4 +1,5 @@
 export * from "./types";
+export * from "./public-metadata";
 export * from "./validation";
 export * from "./service";
 export * from "./merchant-validation";

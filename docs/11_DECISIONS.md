@@ -12,6 +12,11 @@
 - Native map via Kakao SDK with adapter; preserve ability to switch to Google Maps.
 - Event tracking separates behavior (click) vs server-state outcomes (approval/refund).
 - High-priority H1/H2/H5 browser-level counts; H3/H4 later.
+- Public restroom nationwide expansion policy (Phase 2):
+  - Do NOT aim for 100% nationwide restroom matching; publish only `VERIFIED` restrooms with independent official facility evidence and zero review flags.
+  - Strictly separate address matching (`CANDIDATE`) from physical restroom location verification (`VERIFIED`); never auto-promote MOIS address-only matches or `kakao_geocode` agreement to `VERIFIED`, and keep `VERIFIED`/`CANDIDATE`/`REVIEW_REQUIRED` separate from `publication_status`.
+  - Expand regionally in controlled stages (recommended 1st wave: Gyeonggi Bucheon-si / Gwangmyeong-si / Paju-si), protecting existing Suwon official coordinates and never bulk-uploading nationwide data.
+  - Remote DB writes, schema migrations, and publishing MOIS-derived coordinates require separate explicit user approval and license verification (`business.juso.go.kr` & `data.gg.go.kr`).
 
 ## NOT YET DECIDED: configurable only, never pretend production policy fixed
 

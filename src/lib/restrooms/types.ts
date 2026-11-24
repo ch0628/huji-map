@@ -57,11 +57,30 @@ export interface PublicImportRun {
 
 export type CoordinateSource =
   | "gg_publtolt_15011425"
+  | "mois_address_nav_db"
+  | "mois_address_summary_db"
+  | "seoul_public_toilet_info"
+  | "seoul_metro_2026"
+  | "incheon_district_public_toilet"
   | "kakao_geocode"
   | "partner_kakao_js"
   | "admin_manual"
   | "public_csv_original"
   | "other";
+
+export type CoordinateType =
+  | "facility_official"
+  | "building_centroid"
+  | "main_entrance"
+  | "complex_centroid_mean"
+  | "geocoded"
+  | "manual";
+
+export type CoordinateVerificationStatus =
+  | "VERIFIED"
+  | "CANDIDATE"
+  | "REVIEW_REQUIRED"
+  | "UNMATCHED";
 
 export interface Restroom {
   id: string; // uuid
@@ -71,6 +90,10 @@ export interface Restroom {
   coordinate_source?: CoordinateSource | null;
   coordinate_source_id?: string | null;
   coordinate_source_record_id?: string | null;
+  coordinate_type?: CoordinateType | null;
+  coordinate_verification_status?: CoordinateVerificationStatus | null;
+  coordinate_verification_basis?: string | null;
+  coordinate_source_version?: string | null;
   type: RestroomType;
   name: string;
   description: string | null;
@@ -235,6 +258,17 @@ export interface PublicRestroomPhoto {
   image_url?: string | null;
 }
 
+export interface PublicDataSourceSummary {
+  id: string;
+  provider_name: string;
+  dataset_name: string;
+  source_url: string;
+  license_name: string | null;
+  license_url: string | null;
+  attribution_text: string | null;
+  last_synced_at: string | null;
+}
+
 /**
  * Publicly visible restroom detail (GET /api/v1/restrooms/:id)
  */
@@ -255,6 +289,9 @@ export interface PublicRestroomDetail {
   sanitary_products_available: boolean | null;
   access_method: AccessMethod;
   last_verified_at: string | null;
+  source_id?: string | null;
+  coordinate_source?: CoordinateSource | null;
+  data_source?: PublicDataSourceSummary | null;
   business_id: string | null;
   business: PublicBusinessInfo | null;
   hours: PublicRestroomHour[];
