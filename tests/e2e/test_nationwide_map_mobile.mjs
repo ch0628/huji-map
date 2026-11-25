@@ -78,6 +78,19 @@ async function run() {
     });
 
     let candidateCalls = 0;
+    const basicUsageCalls = [];
+
+    await page.route("**/api/v1/usage-counts", async (route) => {
+      try {
+        const body = route.request().postDataJSON();
+        if (body?.feature) basicUsageCalls.push(body.feature);
+      } catch {}
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true, data: { statDate: "2026-11-25" } }),
+      });
+    });
 
     // Kakao SDK를 결정적 테스트용 Mock으로 주입해 360px 모바일 환경에서 실시간 장소/주소 보완 및 재검색 동작 검증
     await page.addInitScript(() => {
@@ -287,7 +300,7 @@ async function run() {
       });
     });
 
-    await page.goto(`${BASE_URL}/map`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE_URL}/map`, { waitUntil: "domcontentloaded" });
 
     const consentDecline = page.locator('[data-testid="consent-decline-btn"]');
     if (await consentDecline.isVisible().catch(() => false)) {
@@ -330,6 +343,7 @@ async function run() {
     }));
     assert(!storageDump.local.includes("37.2615"), "Candidate lat leaked into localStorage");
     assert(!storageDump.session.includes("37.2615"), "Candidate lat leaked into sessionStorage");
+    assert(basicUsageCalls.includes("map_opened"), "Expected consent-free map_opened basic usage count");
     assert(
       consoleErrors.length === 0 && pageErrors.length === 0,
       `Browser errors found: console=${JSON.stringify(consoleErrors)}, page=${JSON.stringify(pageErrors)}`
