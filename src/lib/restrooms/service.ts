@@ -69,6 +69,10 @@ const PUBLIC_APPROVED_OFFICIAL_SOURCES = new Set<string>([
   "seoul_public_toilet_info",
   "seoul_metro_2026",
   "incheon_district_public_toilet",
+  "gyeonggi_city_public_toilet",
+  "jeonbuk_public_toilet",
+  "gwangju_public_toilet",
+  "busan_district_public_toilet",
   "admin_manual",
 ]);
 

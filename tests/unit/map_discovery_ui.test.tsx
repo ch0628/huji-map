@@ -443,7 +443,11 @@ describe("TASK 16: Map Discovery UI - Cards, Filters, BottomSheet, Directions & 
     const getRestroomFetchCalls = (spy: ReturnType<typeof vi.fn>) =>
       spy.mock.calls.filter(([u]) => {
         const s = String(u);
-        return s.includes("/api/v1/restrooms") && !s.includes("/search");
+        return (
+          s.includes("/api/v1/restrooms") &&
+          !s.includes("/search") &&
+          !s.includes("/candidates")
+        );
       });
 
     let fetchSpy: ReturnType<typeof vi.fn>;

@@ -62,6 +62,10 @@ export type CoordinateSource =
   | "seoul_public_toilet_info"
   | "seoul_metro_2026"
   | "incheon_district_public_toilet"
+  | "gyeonggi_city_public_toilet"
+  | "jeonbuk_public_toilet"
+  | "gwangju_public_toilet"
+  | "busan_district_public_toilet"
   | "kakao_geocode"
   | "partner_kakao_js"
   | "admin_manual"
@@ -166,6 +170,26 @@ export interface RestroomPhoto {
   created_at: string;
 }
 
+export type RestroomLocationKind = "official" | "candidate_reference";
+export type RestroomLocationPrecision =
+  | "facility_official"
+  | "kakao_place"
+  | "kakao_address";
+
+export interface CandidateReferenceMeta {
+  sido_name: string;
+  sigungu_name: string;
+  eupmyeondong_name: string | null;
+  open_hours: string | null;
+  closed_days: string | null;
+  source_provider: string;
+  source_dataset_id: string;
+  source_base_date: string | null;
+  attribution_text: string | null;
+  facility_hash: string;
+  coordinate_status: "unlocated";
+}
+
 /**
  * Publicly visible restroom summary for map and catalog list (GET /api/v1/restrooms)
  */
@@ -190,6 +214,49 @@ export interface PublicRestroomSummary {
   primary_photo_storage_path?: string | null;
   primary_photo_url?: string | null;
   distance_meters?: number;
+  /** UI 구분용: 공식 DB 핀 vs 실시간 주소 기반 참고 위치 (메모리 전용) */
+  location_kind?: RestroomLocationKind;
+  location_precision?: RestroomLocationPrecision;
+  candidate_meta?: CandidateReferenceMeta | null;
+}
+
+/**
+ * Nationwide unlocated standard restroom candidate summary (ZERO coordinates/geohash)
+ */
+export interface PublicRestroomCandidateSummary {
+  id: string;
+  source_provider: string;
+  source_dataset_id: string;
+  source_record_id: string;
+  name: string;
+  normalized_name: string;
+  road_address: string | null;
+  jibun_address: string | null;
+  normalized_address: string;
+  sido_code: string;
+  sigungu_code: string;
+  eupmyeondong_code: string | null;
+  sido_name: string;
+  sigungu_name: string;
+  eupmyeondong_name: string | null;
+  facility_type: string | null;
+  open_hours: string | null;
+  closed_days: string | null;
+  gender_type: GenderType;
+  wheelchair_accessible: boolean | null;
+  baby_changing_available: boolean | null;
+  coordinate_status: "unlocated";
+  facility_hash: string;
+  source_base_date: string | null;
+  attribution_text: string | null;
+}
+
+export interface CandidateViewportResponse {
+  items: PublicRestroomCandidateSummary[];
+  regionCodes: string[];
+  regionNames: string[];
+  tooWide: boolean;
+  totalReturned: number;
 }
 
 /**

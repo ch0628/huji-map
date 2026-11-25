@@ -13,6 +13,11 @@ import {
   DirectionsOrigin,
 } from "@/lib/maps/directions";
 
+import type {
+  RestroomLocationKind,
+  RestroomLocationPrecision,
+} from "@/lib/restrooms/types";
+
 export interface MapDirectionsModalProps {
   readonly isOpen: boolean;
   readonly onClose: () => void;
@@ -23,6 +28,8 @@ export interface MapDirectionsModalProps {
     readonly businessId?: string | null;
     readonly address?: string;
     readonly coords: LatLng;
+    readonly locationKind?: RestroomLocationKind;
+    readonly locationPrecision?: RestroomLocationPrecision;
   } | null;
   readonly origin?: {
     readonly name?: string;
@@ -124,14 +131,23 @@ export default function MapDirectionsModal({
         <p className="py-3 text-xs text-slate-600 dark:text-slate-300">
           원하시는 지도 서비스를 선택하시면 길찾기 화면으로 바로 연결됩니다.
         </p>
-        {target.type === "public" && (
+        {target.locationKind === "candidate_reference" ? (
+          <p
+            data-testid="directions-candidate-coord-notice"
+            className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900 dark:bg-amber-950/60 dark:text-amber-200"
+          >
+            {target.locationPrecision === "kakao_address"
+              ? "주소 대표 지점 기반 참고 좌표이며, 실제 화장실 출입구 위치와 다를 수 있습니다."
+              : "실시간 장소·주소 기반 참고 좌표이며, 실제 화장실 출입구 위치와 다를 수 있습니다."}
+          </p>
+        ) : target.type === "public" ? (
           <p
             data-testid="directions-public-coord-notice"
             className="mb-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-600 dark:bg-slate-800/70 dark:text-slate-300"
           >
             지자체 공식 데이터 좌표 기준 위치이며, 실제 화장실 출입구 위치와 다를 수 있습니다.
           </p>
-        )}
+        ) : null}
 
         <div className="space-y-2.5">
           {/* 카카오맵 */}

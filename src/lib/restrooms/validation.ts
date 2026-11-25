@@ -605,3 +605,77 @@ export const restroomSearchQuerySchema = z.object({
 
 export type RestroomSearchQueryInput = z.infer<typeof restroomSearchQuerySchema>;
 
+/**
+ * Query schema for GET /api/v1/restrooms/candidates
+ * Format: ?bbox=south,west,north,east&q=keyword&limit=20
+ * Note: Wide bbox spans are validated syntactically here and handled gracefully as `tooWide: true` in service.
+ */
+export const candidateViewportQuerySchema = z
+  .object({
+    bbox: z
+      .string({ message: "지도 영역(bbox) 파라미터가 필요합니다." })
+      .trim()
+      .min(1, "지도 영역(bbox) 파라미터가 필요합니다."),
+    q: z.string().trim().max(100, "검색어는 최대 100자까지 입력할 수 있습니다.").optional(),
+    limit: z.coerce
+      .number()
+      .int("조회 개수는 정수여야 합니다.")
+      .min(1, "최소 1개 이상 조회해야 합니다.")
+      .max(40, "한 화면에 최대 40개까지 후보를 조회할 수 있습니다.")
+      .default(20),
+  })
+  .superRefine((data, ctx) => {
+    const parts = data.bbox.split(",").map((p) => p.trim());
+    if (parts.length !== 4) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "bbox는 south,west,north,east 형식의 4개 숫자여야 합니다.",
+        path: ["bbox"],
+      });
+      return;
+    }
+
+    const nums = parts.map((p) => Number(p));
+    if (nums.some((n) => Number.isNaN(n) || !Number.isFinite(n))) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "bbox 좌표는 유효한 숫자여야 합니다.",
+        path: ["bbox"],
+      });
+      return;
+    }
+
+    const [south, west, north, east] = nums;
+    if (south < -90 || south > 90 || north < -90 || north > 90) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "위도 범위는 -90에서 90 사이여야 합니다.",
+        path: ["bbox"],
+      });
+    }
+    if (west < -180 || west > 180 || east < -180 || east > 180) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "경도 범위는 -180에서 180 사이여야 합니다.",
+        path: ["bbox"],
+      });
+    }
+    if (south > north) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "남단 위도(south)는 북단 위도(north)보다 작거나 같아야 합니다.",
+        path: ["bbox"],
+      });
+    }
+    if (west > east) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "서단 경도(west)는 동단 경도(east)보다 작거나 같아야 합니다.",
+        path: ["bbox"],
+      });
+    }
+  });
+
+export type CandidateViewportQueryInput = z.infer<typeof candidateViewportQuerySchema>;
+
+
