@@ -79,3 +79,95 @@ export interface AdminRestroomDetail extends Restroom {
   photos: RestroomPhoto[];
   audit_logs: AdminRestroomAuditLog[];
 }
+
+export type AdminRestroomVerificationCategory =
+  | "field_verified"
+  | "official_validated"
+  | "review_required"
+  | "legacy_unset"
+  | "partner_direct";
+
+export type AdminRestroomSourceCategory =
+  | "seoul_oa22586"
+  | "suwon_15011425"
+  | "partner"
+  | "other";
+
+export interface AdminRestroomRegionStat {
+  key: string;
+  label: string;
+  total: number;
+  mapVisible: number;
+  publicCount: number;
+  partnerCount: number;
+}
+
+export interface AdminRestroomStats {
+  totalCount: number;
+  mapVisibleCount: number;
+  hiddenCount: number;
+  partnerDiscoveryEnabled: boolean;
+  byType: {
+    public: number;
+    partner: number;
+  };
+  byPublicationStatus: {
+    published: number;
+    draft: number;
+    pending: number;
+    suspended: number;
+    archived: number;
+  };
+  regionSummary: {
+    seoulTotal: number;
+    suwonTotal: number;
+    otherTotal: number;
+  };
+  byRegion: AdminRestroomRegionStat[];
+  bySeoulGu: AdminRestroomRegionStat[];
+  byDataSource: Array<{
+    key: AdminRestroomSourceCategory;
+    label: string;
+    total: number;
+  }>;
+  byVerificationStatus: {
+    fieldVerified: number;
+    officialValidated: number;
+    reviewRequired: number;
+    legacyUnset: number;
+    partnerDirect: number;
+  };
+  generatedAt: string;
+}
+
+export interface AdminRestroomInventoryItem {
+  id: string;
+  name: string;
+  type: RestroomType;
+  publication_status: PublicationStatus;
+  road_address: string;
+  address_detail: string | null;
+  region_key: string;
+  region_label: string;
+  source_key: AdminRestroomSourceCategory;
+  source_label: string;
+  coordinate_source: string | null;
+  coordinate_type: string | null;
+  coordinate_verification_status: string | null;
+  verification_category: AdminRestroomVerificationCategory;
+  verification_label: string;
+  is_map_visible: boolean;
+  business_id: string | null;
+  business_name: string | null;
+  last_verified_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminRestroomInventoryResult {
+  items: AdminRestroomInventoryItem[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}

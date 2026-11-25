@@ -27,6 +27,13 @@ const ADMIN_TOOLS = [
     testId: "admin-card-restrooms",
   },
   {
+    href: "/admin/restrooms/inventory",
+    title: "전체 화장실 현황 및 목록",
+    description: "전체 DB 등록·지도 공개 집계, 지역·출처·검증 필터 및 페이지네이션 조회",
+    icon: "🗂️",
+    testId: "admin-card-restroom-inventory",
+  },
+  {
     href: "/admin/receipts",
     title: "영수증 수동 심사",
     description: "고객 제출 비공개 영수증 이미지 대조 및 승인/반려/재제출 요청",

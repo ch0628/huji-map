@@ -76,3 +76,34 @@ export type AdminPhotoReplacementDecisionInput = z.infer<
   typeof adminPhotoReplacementDecisionSchema
 >;
 
+export const adminRestroomInventoryFilterSchema = z.object({
+  q: z.string().trim().max(100).optional(),
+  region: z.string().trim().max(40).default("all"),
+  type: z.enum(["all", "public", "partner"]).default("all"),
+  status: z
+    .enum(["all", "published", "draft", "pending", "suspended", "archived"])
+    .default("all"),
+  source: z
+    .enum(["all", "seoul_oa22586", "suwon_15011425", "partner", "other"])
+    .default("all"),
+  verification: z
+    .enum([
+      "all",
+      "field_verified",
+      "official_validated",
+      "review_required",
+      "legacy_unset",
+      "partner_direct",
+    ])
+    .default("all"),
+  sort: z
+    .enum(["created_desc", "created_asc", "name_asc", "name_desc"])
+    .default("created_desc"),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+export type AdminRestroomInventoryFilter = z.infer<
+  typeof adminRestroomInventoryFilterSchema
+>;
+

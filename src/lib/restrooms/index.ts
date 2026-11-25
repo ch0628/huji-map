@@ -9,4 +9,5 @@ export * from "./photo-service";
 export * from "./admin-types";
 export * from "./admin-validation";
 export * from "./admin-service";
+export * from "./admin-inventory-service";
 

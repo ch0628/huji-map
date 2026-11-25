@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import RestroomStatusBadge from "@/components/restroom/RestroomStatusBadge";
 import { PHOTO_TYPE_LABELS } from "@/components/restroom/RestroomPhotoManager";
 import type {
@@ -257,13 +258,22 @@ export default function AdminRestroomsClient() {
       className="flex flex-col gap-4 p-4 max-w-4xl mx-auto w-full min-w-0"
     >
       {/* 상단 타이틀 및 안내 */}
-      <div className="flex flex-col gap-1">
-        <h1 className="text-xl font-bold text-slate-900 dark:text-white">
-          화장실 심사 및 공개 관리
-        </h1>
-        <p className="text-xs text-slate-500 dark:text-slate-400">
-          제휴 및 공공 화장실의 좌표, 시설 정보, 이용 정책을 검수하고 지도의 공개 상태를 관리합니다.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-xl font-bold text-slate-900 dark:text-white">
+            화장실 심사 및 공개 관리
+          </h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            제휴 및 공공 화장실의 좌표, 시설 정보, 이용 정책을 검수하고 지도의 공개 상태를 관리합니다.
+          </p>
+        </div>
+        <Link
+          href="/admin/restrooms/inventory"
+          data-testid="link-admin-restroom-inventory"
+          className="inline-flex min-h-[36px] shrink-0 items-center rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+        >
+          전체 화장실 통계·목록 →
+        </Link>
       </div>
 
       {/* 상태 필터 탭 */}
