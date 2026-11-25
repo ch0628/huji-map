@@ -323,7 +323,7 @@ describe("TASK 20: Payment Schema & Types Static Verification", () => {
       process.cwd(),
       "supabase/migrations/20261114000000_payment_schema.sql"
     );
-    const sql = fs.readFileSync(migrationPath, "utf-8");
+    const sql = fs.readFileSync(migrationPath, "utf-8").replace(/\r\n/g, "\n");
 
     it("defines access_sessions, payment_orders, and payment_refunds tables", () => {
       expect(sql).toContain("CREATE TABLE IF NOT EXISTS public.access_sessions");
