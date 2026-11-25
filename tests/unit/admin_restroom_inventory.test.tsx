@@ -186,6 +186,20 @@ function createDatasetMockSupabase(rows: any[], options?: { queriedTables?: stri
                   r.coordinate_verification_basis == null ||
                   !String(r.coordinate_verification_basis).includes("FIELD_VERIFIED=true")
               );
+            } else if (expr.includes("address_detail.is.null,and(")) {
+              list = list.filter(
+                (r) =>
+                  r.address_detail == null ||
+                  (!matchesIlike(r.address_detail, "서울%") &&
+                    !matchesIlike(r.address_detail, "%수원시%") &&
+                    !matchesIlike(r.address_detail, "%수원특례시%"))
+              );
+            } else if (expr.includes("road_address.ilike.")) {
+              const clauses: Array<[string, string]> = expr.split(",").map((c: string) => {
+                const idx = c.indexOf(".ilike.");
+                return [c.slice(0, idx), c.slice(idx + ".ilike.".length)];
+              });
+              list = list.filter((r) => clauses.some(([col, pat]) => matchesIlike(r[col], pat)));
             }
           }
           for (let i = state.orders.length - 1; i >= 0; i--) {
@@ -224,6 +238,23 @@ describe("Admin Restroom Inventory & Stats (TASK 1~4)", () => {
       seoulGu: "강남구",
     });
     expect(extractRestroomRegion("경기도 수원시 팔달구 효원로 241")).toEqual({
+      group: "suwon",
+      key: "suwon",
+      label: "경기도 수원시",
+      seoulGu: null,
+    });
+    expect(
+      extractRestroomRegion(
+        "경기도 영통구 센트럴타운로 103(이의동)",
+        "(지번) 경기도 수원시 영통구 이의동 1330-1"
+      )
+    ).toEqual({
+      group: "suwon",
+      key: "suwon",
+      label: "경기도 수원시",
+      seoulGu: null,
+    });
+    expect(extractRestroomRegion("경기도 수원특례시 권선구 금곡로73번길 33")).toEqual({
       group: "suwon",
       key: "suwon",
       label: "경기도 수원시",
@@ -476,6 +507,13 @@ describe("Admin Restroom Inventory & Stats (TASK 1~4)", () => {
     expect(p2.items).toHaveLength(50);
     const overlap = p1.items.filter((x) => p2.items.some((y) => y.id === x.id));
     expect(overlap).toHaveLength(0);
+
+    // Verify suwon filter matches address_detail fallback rows consistently with stats
+    const suwonList = await listAdminRestroomInventory(
+      mockDb,
+      adminRestroomInventoryFilterSchema.parse({ region: "suwon", page: "1", limit: "50" })
+    );
+    expect(suwonList.total).toBe(506);
   });
 
   it("enforces admin role on /stats, /inventory APIs and SSR page (401/403/400/200)", async () => {

@@ -67,7 +67,7 @@ export function extractRestroomRegion(
     };
   }
 
-  if (/수원시/.test(combined)) {
+  if (/수원(?:시|특례시)/.test(combined)) {
     return {
       group: "suwon",
       key: "suwon",
@@ -413,21 +413,29 @@ export async function listAdminRestroomInventory(
     }
   }
 
-  // 2. Region filter
+  // 2. Region filter (must stay consistent with extractRestroomRegion across road_address + address_detail)
   if (filter.region && filter.region !== "all") {
     if (filter.region === "seoul") {
-      query = query.ilike("road_address", "서울%");
+      query = query.or("road_address.ilike.서울%,address_detail.ilike.서울%");
     } else if (filter.region.startsWith("seoul:")) {
       const gu = sanitizePostgrestIlikeTerm(filter.region.slice("seoul:".length));
       if (gu) {
-        query = query.ilike("road_address", `서울%${gu}%`);
+        query = query.or(
+          `road_address.ilike.서울%${gu}%,address_detail.ilike.서울%${gu}%`
+        );
       }
     } else if (filter.region === "suwon") {
-      query = query.ilike("road_address", "%수원시%");
+      query = query.or(
+        "road_address.ilike.%수원시%,road_address.ilike.%수원특례시%,address_detail.ilike.%수원시%,address_detail.ilike.%수원특례시%"
+      );
     } else if (filter.region === "other") {
       query = query
         .not("road_address", "ilike", "서울%")
-        .not("road_address", "ilike", "%수원시%");
+        .not("road_address", "ilike", "%수원시%")
+        .not("road_address", "ilike", "%수원특례시%")
+        .or(
+          "address_detail.is.null,and(address_detail.not.ilike.서울%,address_detail.not.ilike.%수원시%,address_detail.not.ilike.%수원특례시%)"
+        );
     }
   }
 
