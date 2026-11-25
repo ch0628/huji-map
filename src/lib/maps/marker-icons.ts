@@ -9,6 +9,7 @@
 export type MarkerKind =
   | "public"
   | "partner"
+  | "candidate_reference"
   | "current_location"
   | "search_place"
   | "default";
@@ -58,6 +59,20 @@ function searchPlacePinSvg(): string {
   );
 }
 
+function candidateReferencePinSvg(selected: boolean): string {
+  const w = selected ? 42 : 30;
+  const h = selected ? 54 : 40;
+  const stroke = selected ? "#0f172a" : "#ffffff";
+  const sw = selected ? 3 : 2;
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 32 42">` +
+    `<path d="M16 1C8 1 2 7 2 15c0 10 14 26 14 26s14-16 14-26C30 7 24 1 16 1z" fill="#d97706" stroke="${stroke}" stroke-width="${sw}" stroke-dasharray="4 1.5"/>` +
+    `<circle cx="16" cy="15" r="9" fill="#fffbeb"/>` +
+    `<text x="16" y="18.5" text-anchor="middle" font-family="Arial,sans-serif" font-size="8" font-weight="700" fill="#b45309">참고</text>` +
+    `</svg>`
+  );
+}
+
 export function getMarkerIcon(
   kind: MarkerKind | undefined,
   selected = false
@@ -78,6 +93,17 @@ export function getMarkerIcon(
       height: 44,
       anchorX: 17,
       anchorY: 44,
+    };
+  }
+  if (kind === "candidate_reference") {
+    const w = selected ? 42 : 30;
+    const h = selected ? 54 : 40;
+    return {
+      src: toDataUri(candidateReferencePinSvg(selected)),
+      width: w,
+      height: h,
+      anchorX: w / 2,
+      anchorY: h,
     };
   }
   if (kind === "public" || kind === "partner") {

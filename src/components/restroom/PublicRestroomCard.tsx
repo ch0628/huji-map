@@ -51,6 +51,7 @@ export default function PublicRestroomCard({
   distanceMeters,
 }: PublicRestroomCardProps) {
   const isPartner = restroom.type === "partner";
+  const isCandidateReference = restroom.location_kind === "candidate_reference";
   const wheelchairDisplay = resolveAmenityDisplay(restroom.wheelchair_accessible, {
     available: "휠체어 이용 가능",
     unavailable: "휠체어 진입 어려움",
@@ -81,13 +82,20 @@ export default function PublicRestroomCard({
       <div className={`flex items-start justify-between gap-2.5 ${reserveTopRightClose ? "pr-9" : ""}`}>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            {/* 공공 vs 제휴 구분 뱃지 */}
+            {/* 공공 vs 제휴 vs 주소 기반 참고 위치 구분 뱃지 */}
             {isPartner ? (
               <span
                 data-testid="restroom-type-partner-badge"
                 className="inline-flex shrink-0 whitespace-nowrap items-center rounded-md bg-purple-100 px-2 py-0.5 text-xs font-bold text-purple-800 dark:bg-purple-950/80 dark:text-purple-300"
               >
                 🤝 안심 제휴
+              </span>
+            ) : isCandidateReference ? (
+              <span
+                data-testid="restroom-type-candidate-badge"
+                className="inline-flex shrink-0 whitespace-nowrap items-center rounded-md bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900 dark:bg-amber-950/80 dark:text-amber-200"
+              >
+                📌 주소 기반 참고 위치
               </span>
             ) : (
               <span
@@ -192,11 +200,36 @@ export default function PublicRestroomCard({
               </p>
             </div>
           )
+        ) : isCandidateReference ? (
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center justify-between font-medium">
+              <span className="text-amber-800 dark:text-amber-300">
+                📌 주소 기반 참고 위치 · 무료 공공
+              </span>
+              <span className="font-bold text-amber-900 dark:text-amber-200">
+                무료
+              </span>
+            </div>
+            <p
+              data-testid="candidate-reference-guidance-note"
+              className="text-[11px] leading-relaxed text-amber-900/90 dark:text-amber-200/90"
+            >
+              {restroom.location_precision === "kakao_address"
+                ? "주소 대표 지점 기준 참고 위치이며 실제 화장실 출입구와 다를 수 있습니다."
+                : "실시간 장소·주소 검색 기반 참고 위치이며 실제 화장실 출입구와 다를 수 있습니다."}
+              {restroom.candidate_meta?.open_hours
+                ? ` · 운영시간: ${restroom.candidate_meta.open_hours}`
+                : ""}
+              {restroom.candidate_meta?.source_base_date
+                ? ` · 기준일 ${restroom.candidate_meta.source_base_date.slice(0, 10)}`
+                : ""}
+            </p>
+          </div>
         ) : (
           <div className="flex flex-col gap-0.5">
             <div className="flex items-center justify-between font-medium">
               <span className="text-blue-700 dark:text-blue-300">
-                ✨ 누구나 무료 이용
+                ✨ 공식 위치 · 누구나 무료 이용
               </span>
               <span className="font-bold text-blue-900 dark:text-blue-200">
                 무료
@@ -265,8 +298,8 @@ export default function PublicRestroomCard({
           <span>길찾기</span>
         </button>
 
-        {/* 상세 페이지 링크 (test_deposit 제휴 화장실은 상세 페이지에서 보증금 결제 진행) */}
-        {showDetailLink && (
+        {/* 상세 페이지 링크 (공식 DB 화장실만 상세 페이지 제공; 참고 위치는 카드·길찾기만 제공) */}
+        {showDetailLink && !isCandidateReference && (
           <Link
             href={`/restrooms/${restroom.id}`}
             onClick={() => {

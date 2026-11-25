@@ -8,4 +8,5 @@ export * from "./kakao-provider";
 export * from "./directions";
 export * from "./location";
 export * from "./address-search";
+export * from "./candidate-resolver";
 

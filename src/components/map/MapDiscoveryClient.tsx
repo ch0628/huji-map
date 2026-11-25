@@ -10,7 +10,25 @@ import {
   DEFAULT_ZOOM_LEVEL,
 } from "@/lib/maps/types";
 import { getCurrentUserLocation } from "@/lib/maps/location";
-import type { PublicRestroomSummary } from "@/lib/restrooms/types";
+import type {
+  CandidateViewportResponse,
+  PublicRestroomCandidateSummary,
+  PublicRestroomSummary,
+} from "@/lib/restrooms/types";
+import {
+  MAX_CANDIDATE_VIEWPORT_LAT_SPAN,
+  MAX_CANDIDATE_VIEWPORT_LNG_SPAN,
+} from "@/lib/restrooms/korea-admin-regions";
+import {
+  clearCandidateResolverSessionState,
+  createCandidateResolverSessionState,
+  isCoordinateWithinBounds,
+  isResolvedCandidateDuplicateOfOfficial,
+  resolveViewportCandidatesWithKakao,
+  type CandidateResolverSessionState,
+  type ResolveCandidatesOptions,
+  type ResolveCandidatesResult,
+} from "@/lib/maps/candidate-resolver";
 import MapCanvas from "./MapCanvas";
 import MapFilterBar, { RestroomFilterType } from "./MapFilterBar";
 import MapBottomSheet from "./MapBottomSheet";
@@ -42,6 +60,16 @@ export interface MapDiscoveryClientProps {
   readonly restroomSearchFn?: (
     keyword: string
   ) => Promise<PublicRestroomSummary[]>;
+  /** 지도 영역 좌표 미확보 후보 조회 함수 주입 (기본: /api/v1/restrooms/candidates) */
+  readonly candidateFetchFn?: (
+    bounds: MapBounds,
+    signal?: AbortSignal
+  ) => Promise<CandidateViewportResponse>;
+  /** 후보 실시간 카카오 위치 보완 함수 주입 */
+  readonly candidateResolveFn?: (
+    candidates: readonly PublicRestroomCandidateSummary[],
+    options: ResolveCandidatesOptions
+  ) => Promise<ResolveCandidatesResult>;
 }
 
 type AnchorMode = "search" | "user" | "center";
@@ -72,6 +100,46 @@ async function defaultRestroomSearch(
   return Array.isArray(json.data.items) ? json.data.items : [];
 }
 
+async function defaultCandidateFetch(
+  bounds: MapBounds,
+  signal?: AbortSignal
+): Promise<CandidateViewportResponse> {
+  const bbox = `${bounds.south},${bounds.west},${bounds.north},${bounds.east}`;
+  const params = new URLSearchParams({
+    bbox,
+    limit: "15",
+  });
+  const res = await fetch(`/api/v1/restrooms/candidates?${params.toString()}`, {
+    signal,
+  });
+  if (!res.ok) {
+    throw new Error(`후보 화장실 조회 API 오류: ${res.status}`);
+  }
+  const json = await res.json();
+  if (!json.ok || !json.data) {
+    throw new Error(json.error?.message || "후보 화장실 조회 실패");
+  }
+  return json.data as CandidateViewportResponse;
+}
+
+function approximateBoundsFromCenter(center: LatLng, zoomLevel: number): MapBounds {
+  const halfLat = 0.004 * Math.pow(2, Math.max(1, zoomLevel) - 3);
+  const halfLng = halfLat * 1.4;
+  return {
+    south: Math.max(-90, center.lat - halfLat),
+    north: Math.min(90, center.lat + halfLat),
+    west: Math.max(-180, center.lng - halfLng),
+    east: Math.min(180, center.lng + halfLng),
+  };
+}
+
+function isBoundsTooWideForCandidates(bounds: MapBounds): boolean {
+  return (
+    bounds.north - bounds.south > MAX_CANDIDATE_VIEWPORT_LAT_SPAN ||
+    bounds.east - bounds.west > MAX_CANDIDATE_VIEWPORT_LNG_SPAN
+  );
+}
+
 export default function MapDiscoveryClient({
   initialRestroomId,
   initialFilterType = "all",
@@ -79,6 +147,8 @@ export default function MapDiscoveryClient({
   onRestroomsLoaded,
   placeSearchFn = searchKakaoPlaces,
   restroomSearchFn = defaultRestroomSearch,
+  candidateFetchFn = defaultCandidateFetch,
+  candidateResolveFn = resolveViewportCandidatesWithKakao,
 }: MapDiscoveryClientProps) {
   const [center, setCenter] = useState<LatLng>(SUWON_DEFAULT_CENTER);
   const [zoomLevel, setZoomLevel] = useState<number>(DEFAULT_ZOOM_LEVEL);
@@ -123,10 +193,27 @@ export default function MapDiscoveryClient({
     useState<LatLng>(SUWON_DEFAULT_CENTER);
   const [showSearchHere, setShowSearchHere] = useState<boolean>(false);
 
+  // 전국 좌표 미확보 후보 실시간 위치 보완 (세션 메모리 전용, DB/스토리지 비저장)
+  const [candidateRestrooms, setCandidateRestrooms] = useState<
+    PublicRestroomSummary[]
+  >([]);
+  const [candidateStatusNote, setCandidateStatusNote] = useState<string | null>(
+    null
+  );
+
   const searchSeqRef = useRef(0);
   const fetchSeqRef = useRef(0);
+  const candidateSeqRef = useRef(0);
   const searchTimerRef = useRef<NodeJS.Timeout | null>(null);
   const currentMapCenterRef = useRef<LatLng>(SUWON_DEFAULT_CENTER);
+  const latestBoundsRef = useRef<MapBounds | null>(null);
+  const rawRestroomsRef = useRef<PublicRestroomSummary[]>([]);
+  const candidateSessionRef = useRef<CandidateResolverSessionState | null>(
+    null
+  );
+  if (!candidateSessionRef.current) {
+    candidateSessionRef.current = createCandidateResolverSessionState();
+  }
   const lastMoveRef = useRef<{ point: LatLng; at: number }>({
     point: SUWON_DEFAULT_CENTER,
     at: Date.now(),
@@ -137,6 +224,7 @@ export default function MapDiscoveryClient({
   });
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const candidateAbortRef = useRef<AbortController | null>(null);
   const mapProviderRef = useRef<MapProvider | null>(null);
   const isMapReadyRef = useRef<boolean>(false);
   const latestMapMetaRef = useRef<{
@@ -237,6 +325,7 @@ export default function MapDiscoveryClient({
           seen.has(r.id) ? false : (seen.add(r.id), true)
         );
         setSearchedCenter(targetCenter);
+        rawRestroomsRef.current = items;
         setRawRestrooms(items);
         onRestroomsLoaded?.(items);
       } catch (err: any) {
@@ -257,16 +346,130 @@ export default function MapDiscoveryClient({
     [onRestroomsLoaded]
   );
 
-  // 최초 마운트 시 현재 지도 중심 기준으로 1회만 조회
+  // 현재 화면 영역의 미확보 후보 조회 + 카카오 실시간 참고 위치 보완 ('이 지역에서 재검색' 시 호출)
+  const fetchAndResolveCandidates = useCallback(
+    async (targetBounds: MapBounds) => {
+      if (candidateAbortRef.current) {
+        candidateAbortRef.current.abort();
+      }
+      const controller = new AbortController();
+      candidateAbortRef.current = controller;
+      const seq = ++candidateSeqRef.current;
+
+      if (isBoundsTooWideForCandidates(targetBounds)) {
+        setCandidateRestrooms([]);
+        setCandidateStatusNote(
+          "지도를 더 확대하면 주소 기반 참고 화장실도 함께 조회할 수 있습니다."
+        );
+        return;
+      }
+
+      setCandidateStatusNote("주소 기반 후보 화장실 위치를 확인하는 중...");
+
+      try {
+        const candidateResp = await candidateFetchFn(
+          targetBounds,
+          controller.signal
+        );
+        if (controller.signal.aborted || seq !== candidateSeqRef.current) {
+          return;
+        }
+
+        if (candidateResp.tooWide) {
+          setCandidateRestrooms([]);
+          setCandidateStatusNote(
+            "지도 영역이 넓어 공식 DB 화장실만 표시합니다. 확대 후 다시 검색해 주세요."
+          );
+          return;
+        }
+
+        if (!candidateResp.items || candidateResp.items.length === 0) {
+          setCandidateRestrooms([]);
+          setCandidateStatusNote(null);
+          return;
+        }
+
+        const resolved = await candidateResolveFn(candidateResp.items, {
+          bounds: targetBounds,
+          officialRestrooms: rawRestroomsRef.current,
+          sessionState: candidateSessionRef.current!,
+          signal: controller.signal,
+        });
+
+        if (
+          controller.signal.aborted ||
+          resolved.aborted ||
+          seq !== candidateSeqRef.current
+        ) {
+          return;
+        }
+
+        const activeBounds = latestBoundsRef.current ?? targetBounds;
+        const inBoundsItems = resolved.items.filter((item) =>
+          isCoordinateWithinBounds(item.latitude, item.longitude, activeBounds)
+        );
+
+        setCandidateRestrooms(inBoundsItems);
+
+        if (resolved.rateLimited || resolved.quotaExceeded) {
+          setCandidateStatusNote(
+            inBoundsItems.length > 0
+              ? `참고 위치 ${inBoundsItems.length}곳 표시 중 (실시간 조회 한도 도달로 일부 제한)`
+              : "실시간 위치 조회 한도에 도달해 공식 DB 화장실만 표시합니다."
+          );
+        } else if (inBoundsItems.length > 0) {
+          setCandidateStatusNote(
+            `공식 위치 외 주소 기반 참고 위치 ${inBoundsItems.length}곳이 포함되었습니다.`
+          );
+        } else if (resolved.failedCount > 0) {
+          setCandidateStatusNote(
+            "실시간 위치 확인에 일시 오류가 있어 공식 DB 화장실만 표시합니다."
+          );
+        } else {
+          setCandidateStatusNote(null);
+        }
+      } catch (err: unknown) {
+        if (
+          controller.signal.aborted ||
+          seq !== candidateSeqRef.current ||
+          (err instanceof DOMException && err.name === "AbortError")
+        ) {
+          return;
+        }
+        setCandidateRestrooms([]);
+        setCandidateStatusNote(
+          "주소 기반 참고 위치를 불러오지 못해 공식 DB 화장실만 표시합니다."
+        );
+      }
+    },
+    [candidateFetchFn, candidateResolveFn]
+  );
+
+  // 최초 마운트 시 현재 지도 중심 기준으로 1회만 조회 (공식 DB 핀 즉시 표시)
   useEffect(() => {
     fetchRestrooms(SUWON_DEFAULT_CENTER, filterType);
+    const sessionState = candidateSessionRef.current;
+
+    const handleSessionExit = () => {
+      if (sessionState) {
+        clearCandidateResolverSessionState(sessionState);
+      }
+    };
+    window.addEventListener("pagehide", handleSessionExit);
 
     return () => {
+      window.removeEventListener("pagehide", handleSessionExit);
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
+      if (candidateAbortRef.current) {
+        candidateAbortRef.current.abort();
+      }
       if (searchTimerRef.current) {
         clearTimeout(searchTimerRef.current);
+      }
+      if (sessionState) {
+        clearCandidateResolverSessionState(sessionState);
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -284,8 +487,9 @@ export default function MapDiscoveryClient({
     setZoomLevel(level);
   }, []);
 
-  // 지도 bounds 변경 시: 자동 재조회 없이 수동 재검색 버튼만 표시
+  // 지도 bounds 변경 시: 진행 중 후보 요청 무효화 + 자동 재조회 없이 수동 재검색 버튼만 표시
   const handleBoundsChanged = useCallback((newBounds: MapBounds) => {
+    latestBoundsRef.current = newBounds;
     const vc = boundsCenter(newBounds);
     currentMapCenterRef.current = vc;
 
@@ -295,6 +499,10 @@ export default function MapDiscoveryClient({
       haversineMeters(vc, last.point) <= PROGRAMMATIC_MOVE_TOLERANCE_M;
 
     if (!isProgrammaticMove) {
+      if (candidateAbortRef.current) {
+        candidateAbortRef.current.abort();
+      }
+      candidateSeqRef.current += 1;
       setShowSearchHere(true);
       if (haversineMeters(vc, last.point) > MANUAL_PAN_THRESHOLD_M) {
         setAnchorMode("center");
@@ -302,7 +510,7 @@ export default function MapDiscoveryClient({
     }
   }, []);
 
-  // 지도 줌 변경 시: 자동 재조회 없이 수동 재검색 버튼만 표시
+  // 지도 줌 변경 시: 진행 중 후보 요청 무효화 + 수동 재검색 버튼 표시
   const handleZoomChanged = useCallback((newZoom: number) => {
     setZoomLevel(newZoom);
     const last = lastZoomRef.current;
@@ -310,6 +518,10 @@ export default function MapDiscoveryClient({
       Date.now() - last.at <= PROGRAMMATIC_MOVE_GRACE_MS &&
       last.zoom === newZoom;
     if (!isProgrammaticZoom) {
+      if (candidateAbortRef.current) {
+        candidateAbortRef.current.abort();
+      }
+      candidateSeqRef.current += 1;
       setShowSearchHere(true);
     }
   }, []);
@@ -493,9 +705,48 @@ export default function MapDiscoveryClient({
     };
   }, [anchorMode, searchAnchor, userLocation, searchedCenter]);
 
-  // 기준점으로부터의 거리순 정렬 (서버 거리순 우선, 공공/제휴 필터 이중 적용)
+  // 기준점으로부터의 거리순 정렬 (공식 DB 핀 우선, 참고 위치는 중복 제거 후 통합)
   const { filteredRestrooms, distancesById } = useMemo(() => {
-    let list = rawRestrooms;
+    const dedupedCandidates =
+      filterType === "partner"
+        ? []
+        : candidateRestrooms.filter((cand) => {
+            if (!cand.candidate_meta) return true;
+            return !isResolvedCandidateDuplicateOfOfficial(
+              {
+                id: cand.id.replace(/^candidate:/, ""),
+                source_provider: cand.candidate_meta.source_provider,
+                source_dataset_id: cand.candidate_meta.source_dataset_id,
+                source_record_id: cand.id,
+                name: cand.name,
+                normalized_name: cand.name,
+                road_address: cand.road_address,
+                jibun_address: null,
+                normalized_address: cand.road_address,
+                sido_code: "",
+                sigungu_code: "",
+                eupmyeondong_code: null,
+                sido_name: cand.candidate_meta.sido_name,
+                sigungu_name: cand.candidate_meta.sigungu_name,
+                eupmyeondong_name: cand.candidate_meta.eupmyeondong_name,
+                facility_type: null,
+                open_hours: cand.candidate_meta.open_hours,
+                closed_days: cand.candidate_meta.closed_days,
+                gender_type: cand.gender_type,
+                wheelchair_accessible: cand.wheelchair_accessible,
+                baby_changing_available: cand.baby_changing_available,
+                coordinate_status: "unlocated",
+                facility_hash: cand.candidate_meta.facility_hash,
+                source_base_date: cand.candidate_meta.source_base_date,
+                attribution_text: cand.candidate_meta.attribution_text,
+              },
+              cand.latitude,
+              cand.longitude,
+              rawRestrooms
+            );
+          });
+
+    let list: PublicRestroomSummary[] = [...rawRestrooms, ...dedupedCandidates];
     if (filterType === "public") {
       list = list.filter((r) => r.type === "public");
     } else if (filterType === "partner") {
@@ -517,13 +768,21 @@ export default function MapDiscoveryClient({
       distances[r.id] = d;
       return { r, d };
     });
-    withDistance.sort((a, b) => a.d - b.d || a.r.id.localeCompare(b.r.id));
+    // 동일 거리 또는 근접 시 공식 DB 핀을 참고 위치보다 우선 표시
+    withDistance.sort((a, b) => {
+      const distDiff = a.d - b.d;
+      if (Math.abs(distDiff) > 0.5) return distDiff;
+      const aRank = a.r.location_kind === "candidate_reference" ? 1 : 0;
+      const bRank = b.r.location_kind === "candidate_reference" ? 1 : 0;
+      if (aRank !== bRank) return aRank - bRank;
+      return a.r.id.localeCompare(b.r.id);
+    });
 
     return {
       filteredRestrooms: withDistance.map((x) => x.r),
       distancesById: distances,
     };
-  }, [rawRestrooms, filterType, reference, searchedCenter]);
+  }, [rawRestrooms, candidateRestrooms, filterType, reference, searchedCenter]);
 
 
   // 선택된 화장실 객체
@@ -531,11 +790,12 @@ export default function MapDiscoveryClient({
     if (!selectedRestroomId) return null;
     return (
       rawRestrooms.find((r) => r.id === selectedRestroomId) ??
+      candidateRestrooms.find((r) => r.id === selectedRestroomId) ??
       (pinnedSearchRestroom?.id === selectedRestroomId
         ? pinnedSearchRestroom
         : null)
     );
-  }, [rawRestrooms, selectedRestroomId, pinnedSearchRestroom]);
+  }, [rawRestrooms, candidateRestrooms, selectedRestroomId, pinnedSearchRestroom]);
 
   // 화장실 카드가 바텀시트에 실제 노출될 때 restroom_card_viewed 기록
   useEffect(() => {
@@ -551,26 +811,33 @@ export default function MapDiscoveryClient({
   const markers: MarkerOptions[] = useMemo(() => {
     const list: MarkerOptions[] = filteredRestrooms
       .filter((r) => r.latitude !== null && r.longitude !== null)
-      .map((r, index) => ({
-        id: r.id,
-        position: { lat: r.latitude, lng: r.longitude },
-        title: `[${r.type === "partner" ? "제휴" : "공공"}] ${r.name}`,
-        type: r.type,
-        selected: r.id === selectedRestroomId,
-        zIndex: r.id === selectedRestroomId ? 15 : 2,
-        onClick: (id: string) => {
-          trackBasicMarkerClicked();
-          trackMarkerClicked({
-            restroom: r,
-            markerIndex: index,
-          });
-          selectionSourceRef.current = "marker_selection";
-          setSelectedRestroomId(id);
-          setIsSheetExpanded(false);
-          // 선택된 화장실로 지도 부드럽게 이동
-          moveTo({ lat: r.latitude, lng: r.longitude });
-        },
-      }));
+      .map((r, index) => {
+        const isCandRef = r.location_kind === "candidate_reference";
+        return {
+          id: r.id,
+          position: { lat: r.latitude, lng: r.longitude },
+          title: isCandRef
+            ? `[참고위치] ${r.name}`
+            : `[${r.type === "partner" ? "제휴" : "공공"}] ${r.name}`,
+          type: isCandRef ? "candidate_reference" : r.type,
+          selected: r.id === selectedRestroomId,
+          zIndex: r.id === selectedRestroomId ? 15 : isCandRef ? 1 : 2,
+          onClick: (id: string) => {
+            trackBasicMarkerClicked();
+            if (!isCandRef) {
+              trackMarkerClicked({
+                restroom: r,
+                markerIndex: index,
+              });
+            }
+            selectionSourceRef.current = "marker_selection";
+            setSelectedRestroomId(id);
+            setIsSheetExpanded(false);
+            // 선택된 화장실로 지도 부드럽게 이동
+            moveTo({ lat: r.latitude, lng: r.longitude });
+          },
+        };
+      });
 
     // 검색 선택한 장소 초록색 전용 마커 추가
     if (searchAnchor) {
@@ -628,12 +895,25 @@ export default function MapDiscoveryClient({
     }
   }, [fetchRestrooms, filterType, moveTo]);
 
-  // 이 지역에서 재검색 버튼 핸들러
+  // 이 지역에서 재검색 버튼 핸들러 (공식 DB 우선 조회 + 참고 위치 실시간 통합)
   const handleSearchHereClick = useCallback(() => {
     setAnchorMode("center");
     setShowSearchHere(false);
-    fetchRestrooms(currentMapCenterRef.current, filterType);
-  }, [fetchRestrooms, filterType]);
+    const targetCenter = currentMapCenterRef.current;
+    const activeBounds =
+      mapProviderRef.current?.getBounds() ??
+      latestBoundsRef.current ??
+      approximateBoundsFromCenter(targetCenter, zoomLevel);
+    latestBoundsRef.current = activeBounds;
+
+    fetchRestrooms(targetCenter, filterType);
+    if (filterType !== "partner") {
+      fetchAndResolveCandidates(activeBounds);
+    } else {
+      setCandidateRestrooms([]);
+      setCandidateStatusNote(null);
+    }
+  }, [fetchAndResolveCandidates, fetchRestrooms, filterType, zoomLevel]);
 
   // 줌 제어 핸들러 (자동 재조회 없이 수동 재검색 버튼 표시)
   const handleZoomIn = () => {
@@ -825,6 +1105,7 @@ export default function MapDiscoveryClient({
         isLoading={isLoading}
         distancesById={distancesById}
         sortBasisLabel={reference.label}
+        candidateStatusNote={candidateStatusNote}
       />
 
       {/* 길찾기 3사 연결 모달 */}
@@ -833,7 +1114,7 @@ export default function MapDiscoveryClient({
         onClose={() => setDirectionsTarget(null)}
         onDirectionsClick={(service) => {
           trackBasicDirectionsClicked();
-          if (directionsTarget) {
+          if (directionsTarget && directionsTarget.location_kind !== "candidate_reference") {
             trackDirectionsClicked({
               restroom: directionsTarget,
               service,
@@ -853,6 +1134,8 @@ export default function MapDiscoveryClient({
                   lat: directionsTarget.latitude,
                   lng: directionsTarget.longitude,
                 },
+                locationKind: directionsTarget.location_kind,
+                locationPrecision: directionsTarget.location_precision,
               }
             : null
         }

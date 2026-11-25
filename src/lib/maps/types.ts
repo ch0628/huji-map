@@ -27,10 +27,11 @@ export interface MarkerOptions {
   readonly id: string;
   readonly position: LatLng;
   readonly title?: string;
-  /** 화장실 및 장소 유형별 시각적 구분 (public: 공공, partner: 제휴, search_place: 검색 장소) */
+  /** 화장실 및 장소 유형별 시각적 구분 (public: 공공, partner: 제휴, candidate_reference: 주소 기반 참고 위치, search_place: 검색 장소) */
   readonly type?:
     | "public"
     | "partner"
+    | "candidate_reference"
     | "current_location"
     | "search_place"
     | "default";

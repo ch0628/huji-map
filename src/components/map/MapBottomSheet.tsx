@@ -20,6 +20,8 @@ export interface MapBottomSheetProps {
   readonly distancesById?: Readonly<Record<string, number>>;
   /** 정렬 기준 설명 (예: "수원역 기준 가까운 순") */
   readonly sortBasisLabel?: string;
+  /** 주소 기반 참고 위치 조회 안내 (로딩/한도/축척 제한 등) */
+  readonly candidateStatusNote?: string | null;
 }
 
 export default function MapBottomSheet({
@@ -35,6 +37,7 @@ export default function MapBottomSheet({
   isLoading = false,
   distancesById,
   sortBasisLabel,
+  candidateStatusNote,
 }: MapBottomSheetProps) {
   // 1. 단일 화장실이 선택된 경우 -> 외부 흰색 컨테이너 없이 하늘색 정보 카드 1개만 표시
   if (selectedRestroom) {
@@ -125,6 +128,14 @@ export default function MapBottomSheet({
                 className="text-[11px] font-medium text-slate-500 dark:text-slate-400"
               >
                 {sortBasisLabel}
+              </p>
+            )}
+            {candidateStatusNote && (
+              <p
+                data-testid="bottom-sheet-candidate-note"
+                className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] font-medium text-amber-900 dark:bg-amber-950/60 dark:text-amber-200"
+              >
+                {candidateStatusNote}
               </p>
             )}
             {restrooms.length === 0 ? (
