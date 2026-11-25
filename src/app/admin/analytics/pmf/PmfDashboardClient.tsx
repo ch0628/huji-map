@@ -69,6 +69,7 @@ export default function PmfDashboardClient() {
   const [report, setReport] = useState<PmfReportData | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [errorStatus, setErrorStatus] = useState<number | null>(null);
 
   const applyPresetDays = (days: number) => {
     const end = getKstTodayDateString();
@@ -79,6 +80,7 @@ export default function PmfDashboardClient() {
   const fetchReport = useCallback(async () => {
     setIsLoading(true);
     setError(null);
+    setErrorStatus(null);
 
     try {
       const sp = new URLSearchParams();
@@ -102,6 +104,7 @@ export default function PmfDashboardClient() {
 
       const body = await res.json().catch(() => null);
       if (!res.ok || !body?.ok) {
+        setErrorStatus(res.status);
         throw new Error(body?.error?.message || `조회 실패 (${res.status})`);
       }
 
@@ -118,6 +121,10 @@ export default function PmfDashboardClient() {
   useEffect(() => {
     fetchReport();
   }, [fetchReport]);
+
+  const basic = report?.basicUsageMetrics;
+  const basicTotals = basic?.totals;
+  const basicDailyTrend = basic?.dailyTrend ?? [];
 
   const metrics = report?.serviceMetrics;
   const ov = metrics?.overview;
@@ -238,7 +245,7 @@ export default function PmfDashboardClient() {
         <div className="border-t border-slate-100 pt-2.5 dark:border-slate-800 space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
-              이용자 로그인 구분 (행동 이벤트 A~C 적용)
+              이용자 로그인 구분 (동의 상세 분석 B-1~B-3 적용)
             </span>
             <div
               role="group"
@@ -284,7 +291,7 @@ export default function PmfDashboardClient() {
               className="rounded-lg bg-blue-50 px-2.5 py-1.5 text-[11px] font-medium text-blue-900 dark:bg-blue-950/40 dark:text-blue-200"
             >
               현재 <strong>{AUTH_FILTER_LABELS[activeAuthFilter]}</strong> 행동 이벤트만 집계
-              중입니다. 아래 D 영역(결제·이용권·영수증·환급) 서버 기록에는 이 필터가 적용되지
+              중입니다. 아래 B-4 영역(결제·이용권·영수증·환급) 서버 기록에는 이 필터가 적용되지
               않습니다.
             </p>
           )}
@@ -302,22 +309,212 @@ export default function PmfDashboardClient() {
         <div
           role="alert"
           data-testid="analytics-error-alert"
-          className="rounded-2xl border border-rose-300 bg-rose-50 p-4 text-xs text-rose-950 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200"
+          className="rounded-2xl border border-rose-300 bg-rose-50 p-4 text-xs text-rose-950 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200 space-y-2"
         >
           <p className="font-bold">⚠️ {error}</p>
+          {errorStatus === 401 && (
+            <a
+              href="/login?returnTo=%2Fadmin%2Fanalytics%2Fpmf&reason=session_expired"
+              className="inline-flex min-h-[36px] items-center justify-center rounded-lg bg-blue-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-blue-700"
+            >
+              관리자 계정으로 다시 로그인
+            </a>
+          )}
         </div>
       )}
 
-      {/* A. 서비스 이용 규모 */}
+      {/* ================================================================ */}
+      {/* A. 전체 이용량 (개인 식별 없이 수집한 단순 실행 횟수)              */}
+      {/* ================================================================ */}
+      <section
+        data-testid="section-overall-usage"
+        aria-label="A. 전체 이용량"
+        className="rounded-2xl border border-emerald-200 bg-white p-4 shadow-sm dark:border-emerald-900/60 dark:bg-slate-900 space-y-3 break-keep"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+              A. 전체 이용량 (개인 미식별 · 실행 횟수)
+            </h2>
+            <p className="mt-0.5 text-[11px] text-slate-600 dark:text-slate-400">
+              동의 여부와 무관하게 날짜별·기능별 <strong>총 실행 횟수</strong>만 서버에서 합산합니다.{" "}
+              <strong>고유 이용자 수(방문자 수)가 아닙니다.</strong>
+            </p>
+          </div>
+          <span className="rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200">
+            개인 식별자·IP·검색어 미저장
+          </span>
+        </div>
+
+        <dl className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+          <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+            <dt className="text-[11px] text-slate-500 dark:text-slate-400">지도 열림 횟수</dt>
+            <dd
+              data-testid="basic-metric-map-opened"
+              className="mt-1 text-lg font-extrabold text-slate-900 dark:text-white"
+            >
+              {(basicTotals?.mapOpened ?? 0).toLocaleString()}회
+            </dd>
+          </div>
+          <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+            <dt className="text-[11px] text-slate-500 dark:text-slate-400">검색 실행 횟수</dt>
+            <dd
+              data-testid="basic-metric-search-executed"
+              className="mt-1 text-lg font-extrabold text-slate-900 dark:text-white"
+            >
+              {(basicTotals?.searchExecuted ?? 0).toLocaleString()}회
+            </dd>
+          </div>
+          <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+            <dt className="text-[11px] text-slate-500 dark:text-slate-400">화장실 핀 클릭 횟수</dt>
+            <dd
+              data-testid="basic-metric-marker-clicks"
+              className="mt-1 text-lg font-extrabold text-slate-900 dark:text-white"
+            >
+              {(basicTotals?.markerClicks ?? 0).toLocaleString()}회
+            </dd>
+          </div>
+          <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+            <dt className="text-[11px] text-slate-500 dark:text-slate-400">화장실 상세 조회 횟수</dt>
+            <dd
+              data-testid="basic-metric-detail-opened"
+              className="mt-1 text-lg font-extrabold text-slate-900 dark:text-white"
+            >
+              {(basicTotals?.detailOpened ?? 0).toLocaleString()}회
+            </dd>
+          </div>
+          <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+            <dt className="text-[11px] text-slate-500 dark:text-slate-400">길찾기 버튼 클릭 횟수</dt>
+            <dd
+              data-testid="basic-metric-directions-clicks"
+              className="mt-1 text-lg font-extrabold text-blue-700 dark:text-blue-300"
+            >
+              {(basicTotals?.directionsClicks ?? 0).toLocaleString()}회
+            </dd>
+          </div>
+          <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+            <dt className="text-[11px] text-slate-500 dark:text-slate-400">결제 버튼 클릭 횟수</dt>
+            <dd
+              data-testid="basic-metric-payment-button-clicks"
+              className="mt-1 text-lg font-extrabold text-purple-700 dark:text-purple-300"
+            >
+              {(basicTotals?.paymentButtonClicks ?? 0).toLocaleString()}회
+            </dd>
+            <dd className="mt-0.5 text-[10px] text-slate-500">실제 결제 성공 아님</dd>
+          </div>
+        </dl>
+
+        <div className="space-y-2">
+          <h3
+            id="basic-daily-trend-heading"
+            className="text-xs font-bold text-slate-700 dark:text-slate-300"
+          >
+            날짜별 전체 이용 횟수 (KST · 실행 횟수)
+          </h3>
+          {basicDailyTrend.length === 0 ? (
+            <p
+              data-testid="basic-daily-trend-empty"
+              className="rounded-xl border border-dashed border-slate-300 py-5 text-center text-[11px] text-slate-500 dark:border-slate-700 dark:text-slate-400"
+            >
+              선택한 기간에 집계된 기본 이용 횟수가 없습니다.
+            </p>
+          ) : (
+            <div
+              tabIndex={0}
+              role="region"
+              aria-labelledby="basic-daily-trend-heading"
+              className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800"
+            >
+              <table className="w-full border-collapse text-left text-[11px]">
+                <thead className="bg-slate-50 text-slate-600 dark:bg-slate-800/70 dark:text-slate-300">
+                  <tr>
+                    <th scope="col" className="whitespace-nowrap px-3 py-2 font-semibold">
+                      날짜 (KST)
+                    </th>
+                    <th scope="col" className="whitespace-nowrap px-2.5 py-2 text-right font-semibold">
+                      지도 열림
+                    </th>
+                    <th scope="col" className="whitespace-nowrap px-2.5 py-2 text-right font-semibold">
+                      검색 실행
+                    </th>
+                    <th scope="col" className="whitespace-nowrap px-2.5 py-2 text-right font-semibold">
+                      핀 클릭
+                    </th>
+                    <th scope="col" className="whitespace-nowrap px-2.5 py-2 text-right font-semibold">
+                      상세 조회
+                    </th>
+                    <th scope="col" className="whitespace-nowrap px-2.5 py-2 text-right font-semibold">
+                      길찾기
+                    </th>
+                    <th scope="col" className="whitespace-nowrap px-3 py-2 text-right font-semibold">
+                      결제버튼
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {basicDailyTrend.map((row) => (
+                    <tr key={row.date} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30">
+                      <th
+                        scope="row"
+                        className="whitespace-nowrap px-3 py-2 font-mono font-semibold text-slate-900 dark:text-slate-100"
+                      >
+                        {row.date}
+                      </th>
+                      <td className="whitespace-nowrap px-2.5 py-2 text-right">{row.mapOpened}</td>
+                      <td className="whitespace-nowrap px-2.5 py-2 text-right">{row.searchExecuted}</td>
+                      <td className="whitespace-nowrap px-2.5 py-2 text-right">{row.markerClicks}</td>
+                      <td className="whitespace-nowrap px-2.5 py-2 text-right">{row.detailOpened}</td>
+                      <td className="whitespace-nowrap px-2.5 py-2 text-right font-semibold text-blue-700 dark:text-blue-300">
+                        {row.directionsClicks}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2 text-right text-purple-700 dark:text-purple-300">
+                        {row.paymentButtonClicks}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">
+            * 반복 클릭이나 새로고침이 포함될 수 있으며, 위 A 영역의 실행 횟수는 아래 B 영역의
+            고유 브라우저 수와 합산하지 않습니다. 로그인 구분 필터도 이 영역에는 적용되지 않습니다.
+          </p>
+        </div>
+      </section>
+
+      {/* ================================================================ */}
+      {/* B. 동의한 이용자의 상세 분석 (연결 행동 및 서버 거래 분리)           */}
+      {/* ================================================================ */}
+      <div
+        data-testid="section-consented-analytics"
+        className="space-y-4 rounded-2xl border border-slate-200/90 bg-slate-50/50 p-3 sm:p-4 dark:border-slate-800 dark:bg-slate-900/40"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+          <div>
+            <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+              B. 동의한 이용자의 상세 분석 (선택 동의 기반 · 연결 행동)
+            </h2>
+            <p className="mt-0.5 text-[11px] text-slate-600 dark:text-slate-400">
+              상세 분석에 동의한 브라우저의 연속 행동(지도 → 선택 → 상세 → 길찾기/결제버튼)만 집계합니다.
+              동의율에 따라 전체 이용량(A)보다 표본 수가 적을 수 있습니다.
+            </p>
+          </div>
+          <span className="rounded bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-800 dark:bg-blue-950/60 dark:text-blue-200">
+            동의 브라우저 한정
+          </span>
+        </div>
+
+      {/* 1. 서비스 이용 규모 */}
       <section
         data-testid="section-scale"
-        aria-label="A. 서비스 이용 규모"
+        aria-label="1. 서비스 이용 규모"
         className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-3"
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-bold text-slate-900 dark:text-white">
-            A. 서비스 이용 규모 (동의 브라우저 기준)
-          </h2>
+          <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+            B-1. 서비스 이용 규모 (동의 브라우저 기준)
+          </h3>
           <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
             실측 건수
           </span>
@@ -359,16 +556,16 @@ export default function PmfDashboardClient() {
         </div>
       </section>
 
-      {/* B. 화장실 관심도 */}
+      {/* B-2. 화장실 관심도 */}
       <section
         data-testid="section-interest"
-        aria-label="B. 화장실 관심도"
+        aria-label="B-2. 화장실 관심도"
         className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-3 break-keep"
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-bold text-slate-900 dark:text-white">
-            B. 화장실 관심도
-          </h2>
+          <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+            B-2. 화장실 관심도
+          </h3>
           <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
             횟수 / 고유 브라우저 구분
           </span>
@@ -497,16 +694,16 @@ export default function PmfDashboardClient() {
         </div>
       </section>
 
-      {/* C. 이용 의사 */}
+      {/* B-3. 이용 의사 */}
       <section
         data-testid="section-intent"
-        aria-label="C. 이용 의사"
+        aria-label="B-3. 이용 의사"
         className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-3 break-keep"
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-bold text-slate-900 dark:text-white">
-            C. 이용 의사 (실측 건수 vs 계산된 전환율)
-          </h2>
+          <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+            B-3. 이용 의사 (실측 건수 vs 계산된 전환율)
+          </h3>
           <span className="rounded bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-800 dark:bg-blue-950/60 dark:text-blue-200">
             동일 화장실·발생 순서 기준
           </span>
@@ -598,16 +795,16 @@ export default function PmfDashboardClient() {
         </div>
       </section>
 
-      {/* D. 기존 서버 기록 */}
+      {/* B-4. 기존 서버 기록 */}
       <section
         data-testid="section-server-records"
-        aria-label="D. 기존 서버 기록"
+        aria-label="B-4. 기존 서버 기록"
         className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-3 break-keep"
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-bold text-slate-900 dark:text-white">
-            D. 기존 서버 거래 · 이용권 기록 (테스트 모드 기준)
-          </h2>
+          <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+            B-4. 기존 서버 거래 · 이용권 기록 (테스트 모드 기준)
+          </h3>
           <span
             data-testid="server-records-filter-notice"
             className="rounded bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-200"
@@ -794,6 +991,7 @@ export default function PmfDashboardClient() {
           </p>
         </div>
       </details>
+      </div>
     </div>
   );
 }

@@ -18,6 +18,7 @@ import {
   SERVER_ONLY_EVENTS,
 } from "./types";
 import type { DeviceType } from "@/lib/db/types";
+import type { BasicUsageFeatureKey } from "@/lib/usage-counts/types";
 
 const BROWSER_ID_STORAGE_KEY = "hm_browser_id";
 const SESSION_ID_STORAGE_KEY = "hm_session_id";
@@ -615,6 +616,30 @@ export async function trackEventSafe(
     return await trackEvent(options);
   } catch {
     return null;
+  }
+}
+
+/**
+ * Increments a non-identifying daily feature counter without requiring user consent or browser/session IDs.
+ * Strictly sends only `{ feature }` and suppresses any network/API error so service UX is never disrupted.
+ */
+export async function trackBasicUsageSafe(
+  feature: BasicUsageFeatureKey
+): Promise<void> {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    await fetch("/api/v1/usage-counts", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ feature }),
+      keepalive: true,
+    });
+  } catch {
+    // Non-blocking: basic usage counting failures must never interrupt map/search/payment UX
   }
 }
 

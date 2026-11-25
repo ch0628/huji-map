@@ -19,10 +19,7 @@ function extractCookie(cookieHeader: string | null, name: string): string | null
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-async function getSafeDbClient() {
-  if (isServiceRoleConfigured()) {
-    return createAdminClient();
-  }
+async function getAuthSupabaseClient() {
   try {
     return await createServerClientInstance();
   } catch (err: unknown) {
@@ -37,6 +34,13 @@ async function getSafeDbClient() {
     }
     throw err;
   }
+}
+
+async function getSafeAnalyticsDbClient(fallbackClient?: any) {
+  if (isServiceRoleConfigured()) {
+    return createAdminClient();
+  }
+  return fallbackClient ?? (await getAuthSupabaseClient());
 }
 
 export async function GET(request: Request) {
@@ -80,12 +84,12 @@ export async function GET(request: Request) {
 
   let dbClient: any;
   if (isMockAdmin) {
-    dbClient = await getSafeDbClient();
+    dbClient = await getSafeAnalyticsDbClient();
   } else {
     try {
-      const supabase = await getSafeDbClient();
-      await requireRole("admin", supabase);
-      dbClient = dbClient || supabase;
+      const authSupabase = await getAuthSupabaseClient();
+      await requireRole("admin", authSupabase);
+      dbClient = await getSafeAnalyticsDbClient(authSupabase);
     } catch (err) {
       if (err instanceof AuthGuardError) {
         return NextResponse.json(
@@ -98,7 +102,7 @@ export async function GET(request: Request) {
             },
             requestId,
           },
-          { status: err.status }
+          { status: err.status, headers: { "Cache-Control": "private, no-store" } }
         );
       }
       return NextResponse.json(
@@ -111,7 +115,7 @@ export async function GET(request: Request) {
           },
           requestId,
         },
-        { status: 401 }
+        { status: 401, headers: { "Cache-Control": "private, no-store" } }
       );
     }
   }
@@ -153,7 +157,7 @@ export async function GET(request: Request) {
         data: report,
         requestId,
       },
-      { status: 200 }
+      { status: 200, headers: { "Cache-Control": "private, no-store" } }
     );
   } catch (err) {
     const message =

@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import type { PublicRestroomDetail } from "@/lib/restrooms/types";
 import DepositPaymentModal from "./DepositPaymentModal";
 import { useEventTracker } from "@/lib/events/hooks";
+import { useBasicUsageTracker } from "@/lib/usage-counts/hooks";
 
 export interface DepositPaymentButtonProps {
   readonly restroom: PublicRestroomDetail;
@@ -33,6 +34,7 @@ export default function DepositPaymentButton({
   const [authChecked, setAuthChecked] = useState<boolean>(Boolean(initialUser));
 
   const { trackPaymentButtonClicked } = useEventTracker();
+  const { trackBasicPaymentButtonClicked } = useBasicUsageTracker();
 
   // If initialUser was not passed, probe current session
   useEffect(() => {
@@ -76,6 +78,7 @@ export default function DepositPaymentButton({
   }
 
   const handleClick = () => {
+    trackBasicPaymentButtonClicked();
     trackPaymentButtonClicked({
       restroom,
       policyId: restroom.active_policy?.id ?? null,

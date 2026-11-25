@@ -14,6 +14,7 @@ import {
 } from "@/components/restroom/restroom-detail-shared";
 import { normalizePublicRestroomMetadata } from "@/lib/restrooms/public-metadata";
 import { useEventTracker } from "@/lib/events/hooks";
+import { useBasicUsageTracker } from "@/lib/usage-counts/hooks";
 
 export interface PublicRestroomDetailViewProps {
   readonly restroom: PublicRestroomDetail;
@@ -44,13 +45,16 @@ export default function PublicRestroomDetailView({
   );
 
   const { trackDetailOpened, trackDirectionsClicked } = useEventTracker();
+  const { trackBasicDetailOpened, trackBasicDirectionsClicked } =
+    useBasicUsageTracker();
 
   useEffect(() => {
+    trackBasicDetailOpened(restroom.id);
     trackDetailOpened({
       restroom,
       sourceComponent: "direct_url",
     });
-  }, [restroom, trackDetailOpened]);
+  }, [restroom, trackBasicDetailOpened, trackDetailOpened]);
 
   return (
     <div
@@ -181,6 +185,7 @@ export default function PublicRestroomDetailView({
         isOpen={showDirections}
         onClose={() => setShowDirections(false)}
         onDirectionsClick={(service) => {
+          trackBasicDirectionsClicked();
           trackDirectionsClicked({
             restroom,
             service,

@@ -191,6 +191,29 @@ export interface ServiceUsageMetrics {
   };
 }
 
+export interface BasicUsageSummary {
+  mapOpened: number;
+  searchExecuted: number;
+  markerClicks: number;
+  detailOpened: number;
+  directionsClicks: number;
+  paymentButtonClicks: number;
+}
+
+export interface BasicUsageDailyRow extends BasicUsageSummary {
+  date: string; // YYYY-MM-DD (KST)
+}
+
+export interface BasicUsageMetrics {
+  dateRange: {
+    startsAt: string;
+    endsAt: string;
+  };
+  includeTest: boolean;
+  totals: BasicUsageSummary;
+  dailyTrend: BasicUsageDailyRow[];
+}
+
 export interface PmfReportData {
   experiment: ExperimentMetadata;
   observationWindow: {
@@ -211,6 +234,7 @@ export interface PmfReportData {
     h5: MetricHypothesisH5;
   };
   eventBreakdown: EventBreakdownItem[];
+  basicUsageMetrics?: BasicUsageMetrics;
   serviceMetrics?: ServiceUsageMetrics;
   generatedAt: string;
 }

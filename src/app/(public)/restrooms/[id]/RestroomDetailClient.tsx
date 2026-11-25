@@ -17,6 +17,7 @@ import {
 } from "@/components/restroom/restroom-detail-shared";
 import { normalizePublicRestroomMetadata } from "@/lib/restrooms/public-metadata";
 import { useVisitorSession, useEventTracker } from "@/lib/events/hooks";
+import { useBasicUsageTracker } from "@/lib/usage-counts/hooks";
 import {
   ANALYTICS_CONSENT_CHANGED_EVENT,
   ANALYTICS_SESSION_RESET_EVENT,
@@ -75,8 +76,11 @@ export default function RestroomDetailClient({
 
   useVisitorSession({ isAuthenticated: Boolean(currentUser) });
   const { trackDetailOpened, trackDirectionsClicked } = useEventTracker();
+  const { trackBasicDetailOpened, trackBasicDirectionsClicked } =
+    useBasicUsageTracker();
 
   useEffect(() => {
+    trackBasicDetailOpened(restroom.id);
     trackDetailOpened({
       restroom,
       sourceComponent: "direct_url",
@@ -97,7 +101,7 @@ export default function RestroomDetailClient({
       window.removeEventListener(ANALYTICS_CONSENT_CHANGED_EVENT, handleAnalyticsSync);
       window.removeEventListener(ANALYTICS_SESSION_RESET_EVENT, handleAnalyticsSync);
     };
-  }, [restroom, trackDetailOpened]);
+  }, [restroom, trackBasicDetailOpened, trackDetailOpened]);
 
   return (
     <div
@@ -331,6 +335,7 @@ export default function RestroomDetailClient({
         isOpen={showDirections}
         onClose={() => setShowDirections(false)}
         onDirectionsClick={(service) => {
+          trackBasicDirectionsClicked();
           trackDirectionsClicked({
             restroom,
             service,

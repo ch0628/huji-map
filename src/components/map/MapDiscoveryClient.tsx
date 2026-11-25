@@ -23,6 +23,7 @@ import {
   haversineMeters,
 } from "@/lib/maps/geo";
 import { useVisitorSession, useEventTracker } from "@/lib/events/hooks";
+import { useBasicUsageTracker } from "@/lib/usage-counts/hooks";
 import {
   ANALYTICS_CONSENT_CHANGED_EVENT,
   ANALYTICS_SESSION_RESET_EVENT,
@@ -159,6 +160,12 @@ export default function MapDiscoveryClient({
     trackCardViewed,
     trackDirectionsClicked,
   } = useEventTracker();
+  const {
+    trackBasicMapOpened,
+    trackBasicMarkerClicked,
+    trackBasicSearchExecuted,
+    trackBasicDirectionsClicked,
+  } = useBasicUsageTracker();
 
   useEffect(() => {
     latestMapMetaRef.current = {
@@ -321,6 +328,7 @@ export default function MapDiscoveryClient({
       }
       setSearchStatus("loading");
       setSearchPartialWarning(null);
+      trackBasicSearchExecuted();
 
       const [placeRes, restroomRes] = await Promise.allSettled([
         placeSearchFn(trimmed),
@@ -363,7 +371,7 @@ export default function MapDiscoveryClient({
       setRestroomSearchResults(restrooms);
       setSearchStatus(places.length + restrooms.length > 0 ? "ok" : "empty");
     },
-    [placeSearchFn, restroomSearchFn]
+    [placeSearchFn, restroomSearchFn, trackBasicSearchExecuted]
   );
 
   // 검색어 입력: 지도는 이동하지 않고 결과 목록만 갱신
@@ -551,6 +559,7 @@ export default function MapDiscoveryClient({
         selected: r.id === selectedRestroomId,
         zIndex: r.id === selectedRestroomId ? 15 : 2,
         onClick: (id: string) => {
+          trackBasicMarkerClicked();
           trackMarkerClicked({
             restroom: r,
             markerIndex: index,
@@ -752,6 +761,7 @@ export default function MapDiscoveryClient({
               zoom: zoomLevel,
               at: Date.now(),
             };
+            trackBasicMapOpened();
             trackMapLoaded({
               zoom: zoomLevel,
               restroomCount: rawRestrooms.length,
@@ -822,6 +832,7 @@ export default function MapDiscoveryClient({
         isOpen={Boolean(directionsTarget)}
         onClose={() => setDirectionsTarget(null)}
         onDirectionsClick={(service) => {
+          trackBasicDirectionsClicked();
           if (directionsTarget) {
             trackDirectionsClicked({
               restroom: directionsTarget,

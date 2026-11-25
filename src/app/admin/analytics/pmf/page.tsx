@@ -5,6 +5,8 @@ import AppShell from "@/components/layout/AppShell";
 import { getServerAuthSession, isE2eMockSessionAllowed } from "@/lib/auth";
 import PmfDashboardClient from "./PmfDashboardClient";
 
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "서비스 이용 분석 - 휴지맵 관리자",
   description: "방문 브라우저, 지도·상세·길찾기, 결제·영수증·환급 실제 서비스 이용 분석",
