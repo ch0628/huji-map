@@ -310,4 +310,78 @@ describe("Phase 3-D Official-Data Policy Gate & Truthful Guidance UI", () => {
       "실제 화장실 출입구 위치와 다를 수 있습니다"
     );
   });
+
+  it("distinguishes genuinely open park/public/sports/parking facilities from ambiguous commercial/subway/portable rows", () => {
+    const baseCommon = {
+      type: "public" as const,
+      description: "개방시간: 상시(24시간)| / 출처: 서울특별시(2026년) · '서울시 공중화장실 위치정보(OA-22586)' · 공공누리 제1유형 (서울 열린데이터광장)",
+      address_detail: null,
+      gender_type: "separate" as const,
+      wheelchair_accessible: true,
+      baby_changing_available: false,
+      sanitary_products_available: null,
+      access_method: "open" as const,
+      publication_status: "published" as const,
+      last_verified_at: "2026-11-20T00:00:00Z",
+      coordinate_source: "seoul_public_toilet_info" as const,
+      coordinate_type: "facility_official" as const,
+      coordinate_verification_status: "VERIFIED" as const,
+      coordinate_verification_basis: "oa22586",
+      coordinate_source_version: "2026-11-20",
+      oa_category_type: "공공개방|",
+      landmark_category: "park",
+      canary_tier: "pilot_50" as const,
+    };
+
+    const pkg: Phase3cLoadPackage = {
+      generatedAt: "2026-11-25T00:00:00Z",
+      pilotTarget: "seoul_oa22586",
+      tier: "pilot_50",
+      moisDependencyRemoved: true,
+      sourceVersion: "2026-11-20",
+      sourceFileSha256: "abc",
+      publicDataSource: SEOUL_OA22586_KOGL1_SOURCE_CONFIG,
+      counts: { restrooms: 4, policies: 4, candidates: 4, distinctGus: 3 },
+      restrooms: [
+        { ...baseCommon, id: "p1", source_record_id: "S10", name: "이태원어린이공원", road_address: "서울특별시 용산구 이태원동 287-1", latitude: 37.5381, longitude: 126.9893, coordinate_source_record_id: "SEOUL-LOC-10", gu_name: "용산구" },
+        { ...baseCommon, id: "p2", source_record_id: "S11", name: "홍릉", road_address: "서울특별시 동대문구 홍릉로 111-3", latitude: 37.5905, longitude: 127.0439, coordinate_source_record_id: "SEOUL-LOC-11", gu_name: "동대문구" },
+        { ...baseCommon, id: "p3", source_record_id: "S12", name: "중화체육공원 이동식화장실", road_address: "서울특별시 중랑구 중화동 363", latitude: 37.602, longitude: 127.074, coordinate_source_record_id: "SEOUL-LOC-12", gu_name: "중랑구" },
+        { ...baseCommon, id: "p4", source_record_id: "S13", name: "명동지하상가", road_address: "서울특별시 중구 남대문로 72", latitude: 37.563, longitude: 126.982, coordinate_source_record_id: "SEOUL-LOC-13", gu_name: "중구" },
+      ],
+      restroomAccessPolicies: [
+        { restroom_id: "p1", version: 1, access_mode: "free", deposit_amount_krw: 0, refund_eligible: false, receipt_window_hours: null, min_purchase_krw: 0, is_active: true },
+        { restroom_id: "p2", version: 1, access_mode: "free", deposit_amount_krw: 0, refund_eligible: false, receipt_window_hours: null, min_purchase_krw: 0, is_active: true },
+        { restroom_id: "p3", version: 1, access_mode: "free", deposit_amount_krw: 0, refund_eligible: false, receipt_window_hours: null, min_purchase_krw: 0, is_active: true },
+        { restroom_id: "p4", version: 1, access_mode: "free", deposit_amount_krw: 0, refund_eligible: false, receipt_window_hours: null, min_purchase_krw: 0, is_active: true },
+      ],
+      restroomCoordinateCandidates: [
+        { restroom_id: "p1", candidate_source: "seoul_public_toilet_info", candidate_source_record_id: "SEOUL-LOC-10", candidate_coord_type: "facility_official", source_version: "2026-11-20", latitude: 37.5381, longitude: 126.9893, verification_status: "VERIFIED", verification_basis: "oa22586", review_reasons: [], is_selected: true },
+        { restroom_id: "p2", candidate_source: "seoul_public_toilet_info", candidate_source_record_id: "SEOUL-LOC-11", candidate_coord_type: "facility_official", source_version: "2026-11-20", latitude: 37.5905, longitude: 127.0439, verification_status: "VERIFIED", verification_basis: "oa22586", review_reasons: [], is_selected: true },
+        { restroom_id: "p3", candidate_source: "seoul_public_toilet_info", candidate_source_record_id: "SEOUL-LOC-12", candidate_coord_type: "facility_official", source_version: "2026-11-20", latitude: 37.602, longitude: 127.074, verification_status: "VERIFIED", verification_basis: "oa22586", review_reasons: [], is_selected: true },
+        { restroom_id: "p4", candidate_source: "seoul_public_toilet_info", candidate_source_record_id: "SEOUL-LOC-13", candidate_coord_type: "facility_official", source_version: "2026-11-20", latitude: 37.563, longitude: 126.982, verification_status: "VERIFIED", verification_basis: "oa22586", review_reasons: [], is_selected: true },
+      ],
+    };
+
+    const oaRecords: SeoulOaRawRecord[] = [
+      { seq: "10", roadAddress: "", jibunAddress: "서울특별시 용산구 이태원동  287-1", lat: 37.5381, lng: 126.9893, buildingName: "이태원어린이공원", guName: "용산구", phone: "02-2199-7600", categoryType: "공공개방|", openHours: "상시(24시간)|", siteUse: "", toiletInfo: "남자|여자|", disabledInfo: "남자|여자|", extraFacilities: "", signage: "", siteType: "공원 및 하천변|", notes: "용산구청 공원녹지과" },
+      { seq: "11", roadAddress: "서울특별시 동대문구 홍릉로 111-3", jibunAddress: "", lat: 37.5905, lng: 127.0439, buildingName: "홍릉", guName: "동대문구", phone: "", categoryType: "공공개방|", openHours: "상시(24시간)|", siteUse: "", toiletInfo: "남자|여자|", disabledInfo: "", extraFacilities: "", signage: "", siteType: "공중화장실|", notes: "동대문구청" },
+      { seq: "12", roadAddress: "", jibunAddress: "서울특별시 중랑구 중화동 363", lat: 37.602, lng: 127.074, buildingName: "중화체육공원 이동식화장실", guName: "중랑구", phone: "", categoryType: "공공개방|", openHours: "상시(24시간)|", siteUse: "", toiletInfo: "남자|여자|", disabledInfo: "", extraFacilities: "", signage: "", siteType: "공원 및 하천변|", notes: "중랑구 치수과" },
+      { seq: "13", roadAddress: "서울특별시 중구 남대문로 72", jibunAddress: "", lat: 37.563, lng: 126.982, buildingName: "명동지하상가", guName: "중구", phone: "", categoryType: "공공개방|", openHours: "상시(24시간)|", siteUse: "", toiletInfo: "남자|여자|", disabledInfo: "", extraFacilities: "", signage: "", siteType: "근생시설|", notes: "서울시설공단" },
+    ];
+
+    const { evaluated, finalPackage } = evaluatePhase3dCanaryCandidates({
+      pkg,
+      oaRecords,
+      remoteRows: [],
+      humanDecisions: [],
+      sourceVersion: "2026-11-20",
+    });
+
+    expect(evaluated[0].validationStatus).toBe("OFFICIAL_SOURCE_VALIDATED");
+    expect(evaluated[0].fieldVerified).toBe(false);
+    expect(evaluated[1].validationStatus).toBe("OFFICIAL_SOURCE_VALIDATED");
+    expect(evaluated[2].validationStatus).toBe("REVIEW_REQUIRED");
+    expect(evaluated[3].validationStatus).toBe("REVIEW_REQUIRED");
+    expect(finalPackage.restrooms.map((r) => r.id)).toEqual(["p1", "p2"]);
+  });
 });

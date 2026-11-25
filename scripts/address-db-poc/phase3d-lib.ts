@@ -152,23 +152,40 @@ export function buildPhase3dOfficialDescription(
   return combined.slice(0, 2000);
 }
 
+const ALLOWED_PUBLIC_SITE_TYPE_TOKENS = [
+  "공공시설",
+  "공원 및 하천변",
+  "공중화장실",
+  "체육시설",
+  "교통시설",
+];
+
+function isAllowedPublicSiteType(siteType: string): boolean {
+  const trimmed = siteType.trim();
+  if (!trimmed) return false;
+  return ALLOWED_PUBLIC_SITE_TYPE_TOKENS.some((token) => trimmed.includes(token));
+}
+
 function hasAmbiguousOrComplexRisk(
   r: Phase3cRestroomRow,
   oa: SeoulOaRawRecord | undefined
 ): string | null {
   if (!oa) return "missing_oa_raw_record";
-  // Road address must include district + road/street number token
+  // Road address (or jibun fallback when road_address is absent in OA-22586) must include number token
   if (!/\d+/.test(r.road_address)) {
     return "road_address_missing_building_number";
   }
   if (/임시|이동식|공사중|철거|폐쇄|불가/.test(`${r.name} ${oa.openHours} ${oa.notes}`)) {
     return "temporary_or_closed_keyword";
   }
-  if (/일대|부근|인근/.test(`${r.road_address} ${oa.roadAddress}`)) {
+  if (/견인보관|견인차량보관/.test(`${r.name} ${oa.notes}`)) {
+    return "restricted_or_unclear_public_access";
+  }
+  if (/일대|부근|인근/.test(`${r.road_address} ${oa.roadAddress} ${oa.jibunAddress}`)) {
     return "ambiguous_vicinity_address";
   }
-  // Multi-tenant/underground station shopping mall complex risk vs clear public civic facility
-  if (oa.siteType.trim() && !oa.siteType.includes("공공시설")) {
+  // Exclude private, underground subway complex, multi-tenant retail, medical interior, and unclear commercial site types
+  if (!isAllowedPublicSiteType(oa.siteType)) {
     return `non_public_site_type:${oa.siteType.trim()}`;
   }
   return null;
@@ -202,7 +219,6 @@ export function evaluatePhase3dCanaryCandidates(params: {
     remoteRows.map((r) => r.source_record_id).filter((v): v is string => Boolean(v))
   );
   const remoteNameSet = new Set(remoteRows.map((r) => normStrict(r.name)));
-  const remoteAddrSet = new Set(remoteRows.map((r) => normStrict(r.road_address)));
 
   const evaluated: Phase3dEvaluatedCandidate[] = [];
 
@@ -244,15 +260,19 @@ export function evaluatePhase3dCanaryCandidates(params: {
     let hasRemoteOverlap =
       remoteIdSet.has(r.id) ||
       remoteSrcSet.has(r.source_record_id) ||
-      remoteNameSet.has(normStrict(r.name)) ||
-      remoteAddrSet.has(normStrict(r.road_address));
+      remoteNameSet.has(normStrict(r.name));
     for (const rr of remoteRows) {
+      const sameSeoulSource = rr.coordinate_source === "seoul_public_toilet_info";
+      if (!sameSeoulSource && rr.road_address && normStrict(rr.road_address) === normStrict(r.road_address)) {
+        hasRemoteOverlap = true;
+      }
       if (rr.latitude == null || rr.longitude == null) continue;
       const d = haversineMeters(r.latitude, r.longitude, rr.latitude, rr.longitude);
       if (nearestRemoteDistM === null || d < nearestRemoteDistM) {
         nearestRemoteDistM = Number(d.toFixed(1));
       }
-      if (d < 200) hasRemoteOverlap = true;
+      const proximityThresholdM = sameSeoulSource ? 50 : 200;
+      if (d < proximityThresholdM) hasRemoteOverlap = true;
     }
 
     const coordKey = `${r.latitude.toFixed(6)},${r.longitude.toFixed(6)}`;
@@ -271,12 +291,15 @@ export function evaluatePhase3dCanaryCandidates(params: {
       r.coordinate_type === "facility_official" &&
       isValidSeoulWgs84(r.latitude, r.longitude);
 
+    const expectedOaPrimaryAddr = oa
+      ? oa.roadAddress.trim() || oa.jibunAddress.trim() || `서울특별시 ${oa.guName.trim()}`
+      : "";
     const hasConsistentNameAddressGu =
       Boolean(oa) &&
       normStrict(r.name) === normStrict(oa!.buildingName) &&
       r.gu_name.trim() === oa!.guName.trim() &&
       r.road_address.includes(r.gu_name.trim()) &&
-      normStrict(r.road_address) === normStrict(oa!.roadAddress);
+      normStrict(r.road_address) === normStrict(expectedOaPrimaryAddr);
 
     const isPublicOpenCategory =
       r.oa_category_type.trim() === "공공개방|" &&
@@ -284,7 +307,7 @@ export function evaluatePhase3dCanaryCandidates(params: {
 
     const hasOfficialOperatingHours =
       Boolean(oa?.openHours.trim()) &&
-      !/미정|확인불가|없음/.test(oa!.openHours) &&
+      !/미정|확인불가|없음|영업시작~종료/.test(oa!.openHours) &&
       Boolean(r.description?.includes("개방시간:"));
 
     const noRemoteOrOaDuplicateRisk =
