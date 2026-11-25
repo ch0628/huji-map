@@ -68,11 +68,20 @@ const PUBLIC_RESTROOM_SUMMARY_COLUMNS =
 const PUBLIC_APPROVED_OFFICIAL_SOURCES = new Set<string>([
   "seoul_public_toilet_info",
   "seoul_metro_2026",
+  "seoul_park_public_toilet",
   "incheon_district_public_toilet",
   "gyeonggi_city_public_toilet",
   "jeonbuk_public_toilet",
   "gwangju_public_toilet",
   "busan_district_public_toilet",
+  "jeju_public_toilet",
+  "daejeon_public_toilet",
+  "ulsan_public_toilet",
+  "chungbuk_public_toilet",
+  "knps_national_park_toilet",
+  "mois_bike_trail_toilet",
+  "mof_beach_toilet",
+  "kex_highway_rest_area_toilet",
   "admin_manual",
 ]);
 
