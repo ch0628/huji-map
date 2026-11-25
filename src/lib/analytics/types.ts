@@ -214,6 +214,18 @@ export interface BasicUsageMetrics {
   dailyTrend: BasicUsageDailyRow[];
 }
 
+export interface AccountExclusionsSummary {
+  activeExcludedAccountsCount: number;
+  excludedEventCount: number;
+  excludedSessionCount: number;
+  excludedOrderCount: number;
+  excludedTicketCount: number;
+  excludedReceiptCount: number;
+  excludedRefundCount: number;
+  basicUsageRetroactiveNote: string;
+  guestActivityNote: string;
+}
+
 export interface PmfReportData {
   experiment: ExperimentMetadata;
   observationWindow: {
@@ -236,6 +248,7 @@ export interface PmfReportData {
   eventBreakdown: EventBreakdownItem[];
   basicUsageMetrics?: BasicUsageMetrics;
   serviceMetrics?: ServiceUsageMetrics;
+  accountExclusions?: AccountExclusionsSummary;
   generatedAt: string;
 }
 

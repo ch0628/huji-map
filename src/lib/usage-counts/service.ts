@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isUserExcludedFromAnalytics } from "@/lib/analytics/exclusions";
 import type { BasicUsageCountResult } from "./types";
 import { recordUsageCountSchema } from "./validation";
 
@@ -14,6 +15,19 @@ export class UsageCountError extends Error {
   }
 }
 
+export interface RecordDailyUsageCountOptions {
+  /**
+   * Cookie-bound Supabase server client for authoritative `auth.getUser()` verification.
+   * When omitted, the request is treated as a pure unauthenticated guest request.
+   */
+  authClient?: SupabaseClient<any> | null;
+  /**
+   * True when the incoming request carried a Supabase auth cookie (`sb-*`) and therefore
+   * requires server auth verification before counting.
+   */
+  hasAuthCookie?: boolean;
+}
+
 function getKstTodayDateString(): string {
   try {
     return new Intl.DateTimeFormat("en-CA", {
@@ -27,13 +41,45 @@ function getKstTodayDateString(): string {
   }
 }
 
+function isAuthSystemOutage(
+  error: { name?: string; message?: string; status?: number; code?: string } | null
+): boolean {
+  if (!error) return false;
+  if (typeof error.status === "number" && (error.status >= 500 || error.status === 0)) {
+    return true;
+  }
+  const name = (error.name || "").toLowerCase();
+  if (name.includes("retryable") || name.includes("fetch")) {
+    return true;
+  }
+  const msg = (error.message || "").toLowerCase();
+  const code = (error.code || "").toLowerCase();
+  return (
+    msg.includes("fetch") ||
+    msg.includes("network") ||
+    msg.includes("timeout") ||
+    msg.includes("econn") ||
+    msg.includes("500") ||
+    msg.includes("502") ||
+    msg.includes("503") ||
+    msg.includes("504") ||
+    msg.includes("service unavailable") ||
+    code === "internal_server_error" ||
+    code === "unexpected_failure"
+  );
+}
+
 /**
  * Atomically increments the non-identifying daily execution counter for an allowlisted feature.
- * Never persists user_id, browser_id, session_id, IP, coordinates, search keywords, or restroom IDs.
+ * When an authenticated user is verified via server `getUser()` and registered in
+ * `analytics_excluded_accounts`, skips incrementing without storing any user identifier.
+ * On auth outage or exclusion lookup failure when auth cookies are present, fails closed
+ * (skips counting) without disrupting user-facing map/search/payment UX.
  */
 export async function recordDailyUsageCount(
   supabase: SupabaseClient<any>,
-  rawPayload: unknown
+  rawPayload: unknown,
+  options?: RecordDailyUsageCountOptions
 ): Promise<BasicUsageCountResult> {
   const parsed = recordUsageCountSchema.safeParse(rawPayload);
   if (!parsed.success) {
@@ -42,6 +88,60 @@ export async function recordDailyUsageCount(
       parsed.error.issues[0]?.message || "유효하지 않은 기본 통계 요청입니다.",
       400
     );
+  }
+
+  const statDateFallback = getKstTodayDateString();
+
+  // Check server-verified authentication & exclusion only when auth client or auth cookie is present
+  if (options?.hasAuthCookie && !options.authClient) {
+    // Auth cookie existed, but server auth client failed to initialize -> fail closed (skip counting)
+    return {
+      statDate: statDateFallback,
+      feature: parsed.data.feature,
+    };
+  }
+
+  if (options?.authClient) {
+    let verifiedUserId: string | null = null;
+    try {
+      const { data: authData, error: authError } = await options.authClient.auth.getUser();
+      if (authError) {
+        if (isAuthSystemOutage(authError)) {
+          return {
+            statDate: statDateFallback,
+            feature: parsed.data.feature,
+          };
+        }
+        // Normal expired / missing / invalid session -> treat as logged-out guest
+        verifiedUserId = null;
+      } else {
+        verifiedUserId = authData?.user?.id ?? null;
+      }
+    } catch {
+      // Auth service exception -> fail closed (do not miscount potential excluded user)
+      return {
+        statDate: statDateFallback,
+        feature: parsed.data.feature,
+      };
+    }
+
+    if (verifiedUserId) {
+      try {
+        const excluded = await isUserExcludedFromAnalytics(supabase, verifiedUserId);
+        if (excluded) {
+          return {
+            statDate: statDateFallback,
+            feature: parsed.data.feature,
+          };
+        }
+      } catch {
+        // Exclusion lookup outage -> fail closed (skip counting) without breaking UX
+        return {
+          statDate: statDateFallback,
+          feature: parsed.data.feature,
+        };
+      }
+    }
   }
 
   const isEnvTest =
@@ -78,7 +178,7 @@ export async function recordDailyUsageCount(
   const statDate =
     data && typeof (data as { stat_date?: unknown }).stat_date === "string"
       ? (data as { stat_date: string }).stat_date
-      : getKstTodayDateString();
+      : statDateFallback;
 
   return {
     statDate,

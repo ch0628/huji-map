@@ -845,11 +845,22 @@ describe("HUJIMAP Complete Behavioral Analytics, Privacy & Dashboard Verificatio
     });
 
     it("PmfDashboardClient: 0건일 때 데이터 부족 안내를 렌더링한다", async () => {
-      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+        const u = String(url);
+        if (u.includes("/api/v1/admin/analytics/excluded-accounts")) {
+          return {
+            ok: true,
+            json: async () => ({
+              ok: true,
+              data: { activeCount: 0, excludedAccounts: [], candidates: [] },
+            }),
+          } as Response;
+        }
+        return {
           ok: true,
-          data: {
+          json: async () => ({
+            ok: true,
+            data: {
             experiment: {
               experimentKey: "pmf_r1",
               name: "test",
@@ -923,7 +934,8 @@ describe("HUJIMAP Complete Behavioral Analytics, Privacy & Dashboard Verificatio
             generatedAt: new Date().toISOString(),
           },
         }),
-      } as Response);
+      } as Response;
+      });
 
       render(<PmfDashboardClient />);
 

@@ -61,6 +61,17 @@ export interface FeatureFlag<T = Record<string, unknown>> {
   updated_at: string;
 }
 
+export interface AnalyticsExcludedAccount {
+  id: string;
+  user_id: string;
+  is_active: boolean;
+  note: string | null;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /**
  * Supabase Database interface structure
  */
@@ -163,6 +174,25 @@ export interface Database {
         Update: {
           enabled?: boolean;
           config?: Record<string, unknown>;
+          updated_by?: string | null;
+          updated_at?: string;
+        };
+      };
+      analytics_excluded_accounts: {
+        Row: AnalyticsExcludedAccount;
+        Insert: {
+          id?: string;
+          user_id: string;
+          is_active?: boolean;
+          note?: string | null;
+          created_by?: string | null;
+          updated_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          is_active?: boolean;
+          note?: string | null;
           updated_by?: string | null;
           updated_at?: string;
         };

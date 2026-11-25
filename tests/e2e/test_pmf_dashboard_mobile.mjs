@@ -368,6 +368,110 @@ async function runTests() {
 
     let emptyStateMock = false;
     const capturedAuthFilters = [];
+    let e2eExcludedRows = [];
+    const e2eCandidates = [
+      {
+        userId: "33333333-3333-4333-8333-333333333301",
+        email: "e2e-test1@example.com",
+        displayName: "시연테스트1",
+        accountStatus: "active",
+        roles: ["customer"],
+        createdAt: "2026-11-24T00:00:00Z",
+      },
+      {
+        userId: "33333333-3333-4333-8333-333333333302",
+        email: "e2e-test2@example.com",
+        displayName: "시연테스트2",
+        accountStatus: "active",
+        roles: ["customer"],
+        createdAt: "2026-11-24T00:00:00Z",
+      },
+      {
+        userId: "33333333-3333-4333-8333-333333333303",
+        email: "e2e-test3@example.com",
+        displayName: "시연테스트3",
+        accountStatus: "active",
+        roles: ["merchant"],
+        createdAt: "2026-11-24T00:00:00Z",
+      },
+    ];
+
+    await page.route(
+      (url) => url.pathname.startsWith("/api/v1/admin/analytics/excluded-accounts"),
+      async (route) => {
+      const req = route.request();
+      const method = req.method().toUpperCase();
+      const urlObj = new URL(req.url());
+
+      if (method === "POST") {
+        const body = req.postDataJSON();
+        const ids = body?.userIds || [];
+        for (const id of ids) {
+          const cand = e2eCandidates.find((c) => c.userId === id);
+          if (cand && !e2eExcludedRows.some((r) => r.userId === id)) {
+            e2eExcludedRows.push({
+              id: `ex-${id.slice(-4)}`,
+              ...cand,
+              isActive: true,
+              note: body?.note ?? null,
+              createdBy: null,
+              updatedBy: null,
+              createdAt: "2026-11-25T12:00:00Z",
+              updatedAt: "2026-11-25T12:00:00Z",
+            });
+          } else {
+            e2eExcludedRows = e2eExcludedRows.map((r) =>
+              r.userId === id ? { ...r, isActive: true } : r
+            );
+          }
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            data: { registeredCount: ids.length, items: e2eExcludedRows },
+          }),
+        });
+        return;
+      }
+
+      if (method === "PATCH") {
+        const uid = decodeURIComponent(urlObj.pathname.split("/").pop() || "");
+        const body = req.postDataJSON();
+        e2eExcludedRows = e2eExcludedRows.map((r) =>
+          r.userId === uid ? { ...r, isActive: Boolean(body?.isActive) } : r
+        );
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            data: e2eExcludedRows.find((r) => r.userId === uid),
+          }),
+        });
+        return;
+      }
+
+      const activeSet = new Set(
+        e2eExcludedRows.filter((r) => r.isActive).map((r) => r.userId)
+      );
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          data: {
+            activeCount: activeSet.size,
+            excludedAccounts: e2eExcludedRows,
+            candidates: e2eCandidates.map((c) => ({
+              ...c,
+              isCurrentlyExcluded: activeSet.has(c.userId),
+            })),
+          },
+        }),
+      });
+    });
 
     await page.route("**/api/v1/admin/analytics/pmf*", async (route) => {
       const urlObj = new URL(route.request().url());
@@ -578,6 +682,31 @@ async function runTests() {
       throw new Error(`Expected guest & authenticated API requests, got: ${JSON.stringify(capturedAuthFilters)}`);
     }
     console.log("✓ 전체/비로그인/로그인 filter switching & Section D independence verified");
+
+    // Step 3-C: Admin Excluded Accounts Manager (select 3 accounts, register, deactivate 1)
+    await page.locator('[data-testid="section-excluded-accounts"]').waitFor({ state: "visible", timeout: 5000 });
+    await page.click('[data-testid="candidate-checkbox-33333333-3333-4333-8333-333333333301"]');
+    await page.click('[data-testid="candidate-checkbox-33333333-3333-4333-8333-333333333302"]');
+    await page.click('[data-testid="candidate-checkbox-33333333-3333-4333-8333-333333333303"]');
+    await page.click('[data-testid="excluded-accounts-register-btn"]');
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[data-testid="excluded-accounts-active-count"]')
+          ?.textContent?.includes("3개"),
+      null,
+      { timeout: 5000 }
+    );
+    await page.click('[data-testid="exclude-remove-btn-33333333-3333-4333-8333-333333333302"]');
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[data-testid="excluded-accounts-active-count"]')
+          ?.textContent?.includes("2개"),
+      null,
+      { timeout: 5000 }
+    );
+    console.log("✓ Admin Excluded Accounts 3-account selection, registration & deactivation verified");
 
     await checkNoHorizontalOverflow("Step 3 Admin Dashboard (360px)");
 

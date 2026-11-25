@@ -576,11 +576,22 @@ describe("STEP 1~5 Verification: Admin Auth Fix, Non-identifying Daily Counts, N
     });
 
     it("PmfDashboardClient가 A(전체 이용량)와 B(동의 상세 분석) 영역을 명확히 구분해 표시한다", async () => {
-      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+        const u = String(url);
+        if (u.includes("/api/v1/admin/analytics/excluded-accounts")) {
+          return {
+            ok: true,
+            json: async () => ({
+              ok: true,
+              data: { activeCount: 0, excludedAccounts: [], candidates: [] },
+            }),
+          } as Response;
+        }
+        return {
           ok: true,
-          data: {
+          json: async () => ({
+            ok: true,
+            data: {
             experiment: {
               experimentKey: "pmf_r1",
               name: "test",
@@ -677,7 +688,8 @@ describe("STEP 1~5 Verification: Admin Auth Fix, Non-identifying Daily Counts, N
             generatedAt: new Date().toISOString(),
           },
         }),
-      } as Response);
+      } as Response;
+      });
 
       render(<PmfDashboardClient />);
 

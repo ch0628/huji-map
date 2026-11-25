@@ -4,6 +4,7 @@ import { isSupabaseAuthConfigured } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/events/rate-limiter";
 import {
   createAdminClient,
+  createServerClientInstance,
   isServiceRoleConfigured,
 } from "@/lib/supabase/server";
 import { recordDailyUsageCount, UsageCountError } from "@/lib/usage-counts";
@@ -23,10 +24,17 @@ function getTransientRateLimitKey(request: Request): string {
     .slice(0, 24)}`;
 }
 
+function hasSupabaseAuthCookie(request: Request): boolean {
+  const cookieHeader = request.headers.get("cookie");
+  if (!cookieHeader) return false;
+  return /(?:^|;\s*)sb-[^=;\s]+=[^;\s]+/.test(cookieHeader);
+}
+
 /**
  * POST /api/v1/usage-counts
- * Records a non-identifying daily execution count without requiring user consent or cookies.
- * Strictly avoids reading auth cookies, user_id, browser_id, search keywords, coordinates, or logging request bodies.
+ * Records a non-identifying daily execution count without requiring user consent or new cookies.
+ * When a Supabase auth cookie (`sb-*`) is present, verifies `auth.getUser()` on the server and
+ * skips counting for active accounts in `analytics_excluded_accounts`, without persisting user_id.
  */
 export async function POST(request: Request) {
   const requestId = crypto.randomUUID();
@@ -78,8 +86,21 @@ export async function POST(request: Request) {
   }
 
   try {
+    const hasAuthCookie = hasSupabaseAuthCookie(request);
+    let authClient = null;
+    if (hasAuthCookie) {
+      try {
+        authClient = await createServerClientInstance();
+      } catch {
+        authClient = null;
+      }
+    }
+
     const adminClient = createAdminClient();
-    const result = await recordDailyUsageCount(adminClient, body);
+    const result = await recordDailyUsageCount(adminClient, body, {
+      authClient,
+      hasAuthCookie,
+    });
 
     return NextResponse.json(
       {

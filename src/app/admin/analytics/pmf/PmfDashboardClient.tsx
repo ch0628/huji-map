@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import ExcludedAccountsManager from "@/components/analytics/ExcludedAccountsManager";
 import type { AnalyticsAuthFilter, PmfReportData } from "@/lib/analytics/types";
 
 const AUTH_FILTER_LABELS: Record<AnalyticsAuthFilter, string> = {
@@ -303,7 +304,24 @@ export default function PmfDashboardClient() {
             {report.summary.excludedTestSessions}건은 기본 통계에서 제외되었습니다.
           </p>
         )}
+
+        {report?.accountExclusions && report.accountExclusions.activeExcludedAccountsCount > 0 && (
+          <p
+            data-testid="analytics-account-exclusion-summary"
+            className="rounded-lg bg-indigo-50 px-2.5 py-1.5 text-[11px] font-medium text-indigo-950 dark:bg-indigo-950/40 dark:text-indigo-200"
+          >
+            제외 설정 계정 {report.accountExclusions.activeExcludedAccountsCount}개 적용 중 —
+            연결된 상세 이벤트 {report.accountExclusions.excludedEventCount}건 · 세션{" "}
+            {report.accountExclusions.excludedSessionCount}건 · 결제{" "}
+            {report.accountExclusions.excludedOrderCount}건 · 이용권{" "}
+            {report.accountExclusions.excludedTicketCount}건 · 영수증{" "}
+            {report.accountExclusions.excludedReceiptCount}건 · 환급{" "}
+            {report.accountExclusions.excludedRefundCount}건이 리포트에서 제외되었습니다.
+          </p>
+        )}
       </section>
+
+      <ExcludedAccountsManager onExclusionsChanged={fetchReport} />
 
       {error && (
         <div
@@ -478,7 +496,8 @@ export default function PmfDashboardClient() {
           )}
           <p className="text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">
             * 반복 클릭이나 새로고침이 포함될 수 있으며, 위 A 영역의 실행 횟수는 아래 B 영역의
-            고유 브라우저 수와 합산하지 않습니다. 로그인 구분 필터도 이 영역에는 적용되지 않습니다.
+            고유 브라우저 수와 합산하지 않습니다. 로그인 구분 필터는 적용되지 않으나, 관리자 제외
+            설정이 활성화된 계정의 로그인 상태 요청은 등록 이후부터 집계 전 제외됩니다.
           </p>
         </div>
       </section>
@@ -809,7 +828,7 @@ export default function PmfDashboardClient() {
             data-testid="server-records-filter-notice"
             className="rounded bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-200"
           >
-            행동 분석 동의·로그인 필터 미적용 (서버 DB 전체 기준)
+            행동 분석 동의·로그인 구분 미적용 (제외 계정 필터 반영)
           </span>
         </div>
 

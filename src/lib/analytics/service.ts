@@ -12,6 +12,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
+  AccountExclusionsSummary,
   AnalyticsAuthFilter,
   BasicUsageDailyRow,
   BasicUsageMetrics,
@@ -26,6 +27,7 @@ import type {
   ServiceDailyTrendRow,
   ServiceUsageMetrics,
 } from "./types";
+import { getActiveExcludedUserIds } from "./exclusions";
 import { OPTIONAL_BEHAVIORAL_EVENTS } from "@/lib/events/types";
 import type { BasicUsageFeatureKey } from "@/lib/usage-counts/types";
 import { type ValidatedPmfQueryParams } from "./validation";
@@ -107,6 +109,7 @@ export function computeH2Metrics(
   sessions: Array<{
     id: string;
     browser_id: string;
+    user_id?: string | null;
     started_at: string;
     utm_source: string | null;
     traveling_now: boolean | null;
@@ -116,20 +119,25 @@ export function computeH2Metrics(
     id?: string;
     session_id?: string | null;
     browser_id?: string | null;
+    user_id?: string | null;
     event_name: string;
     properties?: Record<string, unknown> | null;
     occurred_at: string;
     is_test?: boolean | null;
   }>,
   window: { startsAt: string; endsAt: string },
-  includeTest = false
+  includeTest = false,
+  excludedUserIds?: ReadonlySet<string>
 ): MetricHypothesisH2 {
   const startMs = new Date(window.startsAt).getTime();
   const endMs = new Date(window.endsAt).getTime();
+  const isExcludedUser = (uid?: string | null) =>
+    Boolean(uid && excludedUserIds && excludedUserIds.has(uid));
 
   // 1. Collect authoritative traveling_now server events for sessions
   const travelingSessionsFromEvents = new Set<string>();
   for (const ev of events) {
+    if (isExcludedUser(ev.user_id)) continue;
     if (!includeTest && ev.is_test) continue;
     const evTime = new Date(ev.occurred_at).getTime();
     if (evTime < startMs || evTime > endMs) continue;
@@ -149,6 +157,7 @@ export function computeH2Metrics(
   const nonTravelingBrowsers = new Set<string>();
 
   for (const sess of sessions) {
+    if (isExcludedUser(sess.user_id)) continue;
     if (!includeTest && sess.is_test) continue;
     const sessTime = new Date(sess.started_at).getTime();
     if (sessTime < startMs || sessTime > endMs) continue;
@@ -177,6 +186,7 @@ export function computeH2Metrics(
   const directionsBrowsers = new Set<string>();
 
   for (const ev of events) {
+    if (isExcludedUser(ev.user_id)) continue;
     if (!includeTest && ev.is_test) continue;
     const evTime = new Date(ev.occurred_at).getTime();
     if (evTime < startMs || evTime > endMs) continue;
@@ -227,6 +237,7 @@ export function computeH5Metrics(
   events: Array<{
     id?: string;
     browser_id?: string | null;
+    user_id?: string | null;
     restroom_id?: string | null;
     event_name: string;
     properties?: Record<string, unknown> | null;
@@ -239,10 +250,13 @@ export function computeH5Metrics(
     publication_status?: string;
   }>,
   window: { startsAt: string; endsAt: string },
-  includeTest = false
+  includeTest = false,
+  excludedUserIds?: ReadonlySet<string>
 ): MetricHypothesisH5 {
   const startMs = new Date(window.startsAt).getTime();
   const endMs = new Date(window.endsAt).getTime();
+  const isExcludedUser = (uid?: string | null) =>
+    Boolean(uid && excludedUserIds && excludedUserIds.has(uid));
 
   const restroomMap = new Map(restrooms.map((r) => [r.id, r]));
 
@@ -254,6 +268,7 @@ export function computeH5Metrics(
 
   // 1. Pass 1: Identify all partner restroom card exposures with earliest timestamp
   for (const ev of events) {
+    if (isExcludedUser(ev.user_id)) continue;
     if (!includeTest && ev.is_test) continue;
     const evTime = new Date(ev.occurred_at).getTime();
     if (!Number.isFinite(evTime) || evTime < startMs || evTime > endMs) continue;
@@ -292,6 +307,7 @@ export function computeH5Metrics(
   const convertedBrowsers = new Set<string>();
 
   for (const ev of events) {
+    if (isExcludedUser(ev.user_id)) continue;
     if (!includeTest && ev.is_test) continue;
     const evTime = new Date(ev.occurred_at).getTime();
     if (!Number.isFinite(evTime) || evTime < startMs || evTime > endMs) continue;
@@ -387,10 +403,13 @@ export function computeEventBreakdown(
   }>,
   window: { startsAt: string; endsAt: string },
   includeTest = false,
-  authFilter: AnalyticsAuthFilter = "all"
+  authFilter: AnalyticsAuthFilter = "all",
+  excludedUserIds?: ReadonlySet<string>
 ): EventBreakdownItem[] {
   const startMs = new Date(window.startsAt).getTime();
   const endMs = new Date(window.endsAt).getTime();
+  const isExcludedUser = (uid?: string | null) =>
+    Boolean(uid && excludedUserIds && excludedUserIds.has(uid));
 
   const countsByName = new Map<string, number>();
   const browsersByName = new Map<string, Set<string>>();
@@ -403,6 +422,7 @@ export function computeEventBreakdown(
   }
 
   for (const ev of events) {
+    if (isExcludedUser(ev.user_id)) continue;
     if (!includeTest && ev.is_test) continue;
     if (!matchesAuthFilter(ev, authFilter)) continue;
     const evTime = new Date(ev.occurred_at).getTime();
@@ -479,6 +499,7 @@ export function computeServiceUsageMetrics(params: {
   }>;
   orders: Array<{
     id: string;
+    user_id?: string | null;
     status: string;
     payment_mode?: string | null;
     approved_at?: string | null;
@@ -486,17 +507,20 @@ export function computeServiceUsageMetrics(params: {
   }>;
   accessSessions: Array<{
     id: string;
+    user_id?: string | null;
     status: string;
     authorized_at?: string | null;
     created_at: string;
   }>;
   receipts: Array<{
     id: string;
+    user_id?: string | null;
     submission_status: string;
     created_at: string;
   }>;
   refunds: Array<{
     id: string;
+    payment_order_id?: string | null;
     status: string;
     completed_at?: string | null;
     requested_at?: string | null;
@@ -504,6 +528,7 @@ export function computeServiceUsageMetrics(params: {
   window: { startsAt: string; endsAt: string };
   includeTest: boolean;
   authFilter?: AnalyticsAuthFilter;
+  excludedUserIds?: ReadonlySet<string>;
 }): ServiceUsageMetrics {
   const {
     sessions,
@@ -516,7 +541,18 @@ export function computeServiceUsageMetrics(params: {
     window,
     includeTest,
     authFilter = "all",
+    excludedUserIds,
   } = params;
+
+  const isExcludedUser = (uid?: string | null) =>
+    Boolean(uid && excludedUserIds && excludedUserIds.has(uid));
+
+  const orderUserById = new Map<string, string>();
+  for (const ord of orders) {
+    if (ord.id && ord.user_id) {
+      orderUserById.set(ord.id, ord.user_id);
+    }
+  }
 
   const startMs = new Date(window.startsAt).getTime();
   const endMs = new Date(window.endsAt).getTime();
@@ -579,6 +615,7 @@ export function computeServiceUsageMetrics(params: {
   const authenticatedBrowsersSet = new Set<string>();
 
   for (const s of sessions) {
+    if (isExcludedUser(s.user_id)) continue;
     if (!includeTest && s.is_test) continue;
     if (!inRangeMs(s.started_at, startMs, endMs)) continue;
     if (s.browser_id) {
@@ -652,6 +689,7 @@ export function computeServiceUsageMetrics(params: {
   }> = [];
 
   for (const ev of events) {
+    if (isExcludedUser(ev.user_id)) continue;
     if (!includeTest && ev.is_test) continue;
     if (!inRangeMs(ev.occurred_at, startMs, endMs)) continue;
     if (isAnalyticsRowAuthenticated(ev)) {
@@ -881,6 +919,7 @@ export function computeServiceUsageMetrics(params: {
   let approvedPayments = 0;
   let testModePayments = 0;
   for (const ord of orders) {
+    if (isExcludedUser(ord.user_id)) continue;
     if (ord.status !== "approved" && ord.status !== "canceled") continue;
     const ts = ord.approved_at || ord.created_at;
     if (!inRangeMs(ts, startMs, endMs)) continue;
@@ -897,6 +936,7 @@ export function computeServiceUsageMetrics(params: {
 
   let issuedTickets = 0;
   for (const acc of accessSessions) {
+    if (isExcludedUser(acc.user_id)) continue;
     if (!acc.authorized_at) continue;
     if (!inRangeMs(acc.authorized_at, startMs, endMs)) continue;
     issuedTickets += 1;
@@ -907,6 +947,7 @@ export function computeServiceUsageMetrics(params: {
   let submittedReceipts = 0;
   let approvedReceipts = 0;
   for (const rec of receipts) {
+    if (isExcludedUser(rec.user_id)) continue;
     if (!inRangeMs(rec.created_at, startMs, endMs)) continue;
     submittedReceipts += 1;
     if (rec.submission_status === "approved") {
@@ -918,6 +959,10 @@ export function computeServiceUsageMetrics(params: {
 
   let refundsSucceeded = 0;
   for (const ref of refunds) {
+    const refundOwnerUserId = ref.payment_order_id
+      ? orderUserById.get(ref.payment_order_id) ?? null
+      : null;
+    if (isExcludedUser(refundOwnerUserId)) continue;
     if (ref.status !== "succeeded") continue;
     const ts = ref.completed_at || ref.requested_at || null;
     if (!inRangeMs(ts, startMs, endMs)) continue;
@@ -1117,6 +1162,14 @@ export async function getPmfReport(
     businessesData ?? []
   );
 
+  // 2-B. Fetch active admin-excluded test account IDs
+  let excludedUserIds = new Set<string>();
+  try {
+    excludedUserIds = await getActiveExcludedUserIds(supabase);
+  } catch {
+    // Non-blocking fallback when unit test mocks omit analytics_excluded_accounts
+  }
+
   // 3. Fetch H2/H5 Data: visitor_sessions, event_logs, restrooms
   const { data: sessionsData } = await supabase
     .from("visitor_sessions")
@@ -1177,34 +1230,42 @@ export async function getPmfReport(
     sessionsData ?? [],
     eventsData ?? [],
     window,
-    includeTest
+    includeTest,
+    excludedUserIds
   );
 
   const h5 = computeH5Metrics(
     eventsData ?? [],
     restroomsData ?? [],
     window,
-    includeTest
+    includeTest,
+    excludedUserIds
   );
 
   const eventBreakdown = computeEventBreakdown(
     eventsData ?? [],
     window,
     includeTest,
-    authFilter
+    authFilter,
+    excludedUserIds
   );
 
-  // Summary counts
+  // Summary counts (excluding active excluded test accounts)
   const startMs = new Date(startsAt).getTime();
   const endMs = new Date(endsAt).getTime();
 
   let totalEvents = 0;
   let excludedTestEvents = 0;
+  let excludedAccountEvents = 0;
   const distinctBrowsersSet = new Set<string>();
 
   for (const ev of eventsData ?? []) {
     const t = new Date(ev.occurred_at).getTime();
     if (t >= startMs && t <= endMs) {
+      if (ev.user_id && excludedUserIds.has(ev.user_id)) {
+        excludedAccountEvents += 1;
+        continue;
+      }
       if (ev.is_test) {
         excludedTestEvents += 1;
         if (includeTest) {
@@ -1220,10 +1281,15 @@ export async function getPmfReport(
 
   let distinctSessions = 0;
   let excludedTestSessions = 0;
+  let excludedAccountSessions = 0;
 
   for (const sess of sessionsData ?? []) {
     const t = new Date(sess.started_at).getTime();
     if (t >= startMs && t <= endMs) {
+      if (sess.user_id && excludedUserIds.has(sess.user_id)) {
+        excludedAccountSessions += 1;
+        continue;
+      }
       if (sess.is_test) {
         excludedTestSessions += 1;
         if (includeTest) distinctSessions += 1;
@@ -1242,16 +1308,16 @@ export async function getPmfReport(
     const [ordRes, accRes, recRes, refRes] = await Promise.all([
       supabase
         .from("payment_orders")
-        .select("id, status, payment_mode, approved_at, created_at"),
+        .select("id, user_id, status, payment_mode, approved_at, created_at"),
       supabase
         .from("access_sessions")
-        .select("id, status, authorized_at, created_at"),
+        .select("id, user_id, status, authorized_at, created_at"),
       supabase
         .from("receipt_submissions")
-        .select("id, submission_status, created_at"),
+        .select("id, user_id, submission_status, created_at"),
       supabase
         .from("payment_refunds")
-        .select("id, status, completed_at, requested_at"),
+        .select("id, payment_order_id, status, completed_at, requested_at"),
     ]);
     ordersData = ordRes?.data ?? [];
     accessSessionsData = accRes?.data ?? [];
@@ -1259,6 +1325,63 @@ export async function getPmfReport(
     refundsData = refRes?.data ?? [];
   } catch {
     // Non-blocking fallback when unit test mocks omit transactional tables
+  }
+
+  const orderUserMap = new Map<string, string>();
+  for (const ord of ordersData) {
+    if (ord?.id && ord?.user_id) {
+      orderUserMap.set(ord.id, ord.user_id);
+    }
+  }
+
+  let excludedOrderCount = 0;
+  for (const ord of ordersData) {
+    if (
+      ord?.user_id &&
+      excludedUserIds.has(ord.user_id) &&
+      (ord.status === "approved" || ord.status === "canceled") &&
+      inRangeMs(ord.approved_at || ord.created_at, startMs, endMs)
+    ) {
+      excludedOrderCount += 1;
+    }
+  }
+
+  let excludedTicketCount = 0;
+  for (const acc of accessSessionsData) {
+    if (
+      acc?.user_id &&
+      excludedUserIds.has(acc.user_id) &&
+      acc.authorized_at &&
+      inRangeMs(acc.authorized_at, startMs, endMs)
+    ) {
+      excludedTicketCount += 1;
+    }
+  }
+
+  let excludedReceiptCount = 0;
+  for (const rec of receiptsData) {
+    if (
+      rec?.user_id &&
+      excludedUserIds.has(rec.user_id) &&
+      inRangeMs(rec.created_at, startMs, endMs)
+    ) {
+      excludedReceiptCount += 1;
+    }
+  }
+
+  let excludedRefundCount = 0;
+  for (const ref of refundsData) {
+    const ownerId = ref?.payment_order_id
+      ? orderUserMap.get(ref.payment_order_id) ?? null
+      : null;
+    if (
+      ownerId &&
+      excludedUserIds.has(ownerId) &&
+      ref.status === "succeeded" &&
+      inRangeMs(ref.completed_at || ref.requested_at || null, startMs, endMs)
+    ) {
+      excludedRefundCount += 1;
+    }
   }
 
   const serviceMetrics = computeServiceUsageMetrics({
@@ -1272,6 +1395,7 @@ export async function getPmfReport(
     window,
     includeTest,
     authFilter,
+    excludedUserIds,
   });
 
   // 5. Fetch non-identifying daily usage counts (consent-free total execution counts)
@@ -1307,6 +1431,20 @@ export async function getPmfReport(
     includeTest
   );
 
+  const accountExclusions: AccountExclusionsSummary = {
+    activeExcludedAccountsCount: excludedUserIds.size,
+    excludedEventCount: excludedAccountEvents,
+    excludedSessionCount: excludedAccountSessions,
+    excludedOrderCount,
+    excludedTicketCount,
+    excludedReceiptCount,
+    excludedRefundCount,
+    basicUsageRetroactiveNote:
+      "기본 이용 통계(A. 전체 이용량)는 계정을 식별하지 않는 일별 합계이므로, 제외 설정 저장 이전의 과거 합계에서 테스트 계정 활동만 소급 차감할 수 없으며 설정 이후 로그인 상태의 요청부터 집계 전 제외됩니다.",
+    guestActivityNote:
+      "로그아웃(비로그인) 상태의 활동은 특정 계정과 연결할 수 없으므로 자동 제외되지 않고 비회원 이용량으로 집계됩니다.",
+  };
+
   return {
     experiment,
     observationWindow: {
@@ -1329,6 +1467,7 @@ export async function getPmfReport(
     eventBreakdown,
     basicUsageMetrics,
     serviceMetrics,
+    accountExclusions,
     generatedAt: new Date().toISOString(),
   };
 }
