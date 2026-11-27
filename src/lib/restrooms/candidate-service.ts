@@ -2,9 +2,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { MapBounds } from "@/lib/maps/types";
 import type { Database } from "@/lib/db/types";
 import {
+  extractEupMyeonDongName,
   findIntersectingAdminRegions,
   MAX_CANDIDATE_VIEWPORT_LAT_SPAN,
   MAX_CANDIDATE_VIEWPORT_LNG_SPAN,
+  type KoreaAdminRegion,
 } from "./korea-admin-regions";
 import type {
   CandidateViewportResponse,
@@ -129,6 +131,246 @@ export interface ListViewportCandidatesParams {
   bounds: MapBounds;
   q?: string;
   limit?: number;
+  cursor?: string;
+  excludeIds?: string[];
+}
+
+function parseCandidateCursor(cursor?: string): { offset: number; excludeCount: number } {
+  if (!cursor) return { offset: 0, excludeCount: 0 };
+  const full = cursor.trim().match(/^o:(\d+):x:(\d+)$/);
+  if (full) {
+    const offset = Math.min(Math.max(Number(full[1]) || 0, 0), 500);
+    const excludeCount = Math.min(Math.max(Number(full[2]) || 0, 0), 500);
+    return { offset, excludeCount };
+  }
+  const simple = cursor.trim().match(/^o:(\d+)$/);
+  if (!simple) return { offset: 0, excludeCount: 0 };
+  const n = Number(simple[1]);
+  return {
+    offset: Number.isFinite(n) && n >= 0 ? Math.min(n, 500) : 0,
+    excludeCount: 0,
+  };
+}
+
+function extractRoadStem(address: string | null | undefined): string | null {
+  if (!address) return null;
+  const cleaned = address.normalize("NFKC").replace(/\([^)]*\)/g, " ").trim();
+  const m = cleaned.match(/(?:^|\s)([가-힣0-9]+(?:로\d*길|길|로))(?=\s*(?:지하)?\d|\s|$)/u);
+  return m ? m[1] : null;
+}
+
+function compactRegionToken(name: string): string {
+  return name.replace(/\s+/g, "").trim();
+}
+
+function extractSigunguTokenFromAddress(address: string | null | undefined): string | null {
+  if (!address) return null;
+  const cleaned = address
+    .normalize("NFKC")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(
+      /^(?:서울특별시|서울시|서울|부산광역시|부산시|부산|대구광역시|대구시|대구|인천광역시|인천시|인천|광주광역시|광주시|대전광역시|대전시|대전|울산광역시|울산시|울산|세종특별자치시|세종시|세종|경기도|경기|강원특별자치도|강원도|강원|충청북도|충북|충청남도|충남|전북특별자치도|전라북도|전북|전라남도|전남|경상북도|경북|경상남도|경남|제주특별자치도|제주도|제주)\s+/u,
+      ""
+    );
+  const cityGu = cleaned.match(/^([가-힣]+시)\s+([가-힣]+구)(?=\s|$)/u);
+  if (cityGu) {
+    return `${cityGu[1]}${cityGu[2]}`;
+  }
+  const single = cleaned.match(/^([가-힣]+(?:시|군|구))(?=\s|$)/u);
+  if (single) {
+    return single[1];
+  }
+  return null;
+}
+
+interface OfficialRowHint {
+  name: string;
+  road_address: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+}
+
+interface ViewportOfficialHints {
+  dongWeights: Map<string, number>;
+  roadWeights: Map<string, number>;
+  sigunguCounts: Map<string, number>;
+  hasUrbanDongHint: boolean;
+  hasRuralTownHint: boolean;
+}
+
+function buildViewportOfficialHints(
+  officials: readonly OfficialRowHint[],
+  bounds: MapBounds
+): ViewportOfficialHints {
+  const dongWeights = new Map<string, number>();
+  const roadWeights = new Map<string, number>();
+  const sigunguCounts = new Map<string, number>();
+  let urbanCount = 0;
+  let ruralCount = 0;
+
+  const centerLat = (bounds.south + bounds.north) / 2;
+  const centerLng = (bounds.west + bounds.east) / 2;
+  const latSpan = Math.max(bounds.north - bounds.south, 0.002);
+  const lngSpan = Math.max(bounds.east - bounds.west, 0.002);
+
+  const hasAnyCoords = officials.some(
+    (o) => typeof o.latitude === "number" && typeof o.longitude === "number"
+  );
+  const inBoundsOfficials = hasAnyCoords
+    ? officials.filter(
+        (o) =>
+          typeof o.latitude === "number" &&
+          typeof o.longitude === "number" &&
+          o.latitude >= bounds.south &&
+          o.latitude <= bounds.north &&
+          o.longitude >= bounds.west &&
+          o.longitude <= bounds.east
+      )
+    : officials;
+
+  const targetOfficials = inBoundsOfficials.length > 0 ? inBoundsOfficials : officials;
+
+  for (const off of targetOfficials) {
+    let weight = 1;
+    if (typeof off.latitude === "number" && typeof off.longitude === "number") {
+      const normDist = Math.hypot(
+        (off.latitude - centerLat) / latSpan,
+        (off.longitude - centerLng) / lngSpan
+      );
+      weight = Math.max(0.4, 2.0 - Math.min(normDist, 1.6));
+    }
+
+    const dong = extractEupMyeonDongName(off.road_address, null);
+    if (dong) {
+      dongWeights.set(dong, (dongWeights.get(dong) ?? 0) + weight);
+      if (/(?:동|가)$/u.test(dong)) urbanCount += 1;
+      else if (/(?:읍|면)$/u.test(dong)) ruralCount += 1;
+    }
+    const road = extractRoadStem(off.road_address);
+    if (road) {
+      roadWeights.set(road, (roadWeights.get(road) ?? 0) + weight);
+    }
+    const sgg = extractSigunguTokenFromAddress(off.road_address);
+    if (sgg) {
+      const key = compactRegionToken(sgg);
+      sigunguCounts.set(key, (sigunguCounts.get(key) ?? 0) + weight);
+    }
+  }
+
+  return {
+    dongWeights,
+    roadWeights,
+    sigunguCounts,
+    hasUrbanDongHint: urbanCount > 0 && ruralCount === 0,
+    hasRuralTownHint: ruralCount > 0 && urbanCount === 0,
+  };
+}
+
+function computeRegionOverlapRatio(region: KoreaAdminRegion, bounds: MapBounds): number {
+  const overlapSouth = Math.max(region.south, bounds.south);
+  const overlapNorth = Math.min(region.north, bounds.north);
+  const overlapWest = Math.max(region.west, bounds.west);
+  const overlapEast = Math.min(region.east, bounds.east);
+  if (overlapNorth <= overlapSouth || overlapEast <= overlapWest) return 0;
+  const viewArea = Math.max(
+    (bounds.north - bounds.south) * (bounds.east - bounds.west),
+    1e-9
+  );
+  return Math.min(1, ((overlapNorth - overlapSouth) * (overlapEast - overlapWest)) / viewArea);
+}
+
+function rankRegionsForViewport(
+  regions: readonly KoreaAdminRegion[],
+  bounds: MapBounds,
+  sigunguCounts: ReadonlyMap<string, number>
+): { ranked: KoreaAdminRegion[]; scores: Map<string, number> } {
+  const viewCenterLat = (bounds.south + bounds.north) / 2;
+  const viewCenterLng = (bounds.west + bounds.east) / 2;
+  const scores = new Map<string, number>();
+
+  for (const r of regions) {
+    const overlap = computeRegionOverlapRatio(r, bounds);
+    const containsCenter =
+      viewCenterLat >= r.south &&
+      viewCenterLat <= r.north &&
+      viewCenterLng >= r.west &&
+      viewCenterLng <= r.east;
+    const rLat = (r.south + r.north) / 2;
+    const rLng = (r.west + r.east) / 2;
+    const centerDistSq = (rLat - viewCenterLat) ** 2 + (rLng - viewCenterLng) ** 2;
+    const officialBoost = sigunguCounts.get(compactRegionToken(r.sigunguName)) ?? 0;
+
+    const score =
+      officialBoost * 35 +
+      overlap * 50 +
+      (containsCenter ? 15 : 0) -
+      Math.min(centerDistSq * 250, 20);
+    scores.set(r.sigunguCode, score);
+  }
+
+  const ranked = [...regions].sort((a, b) => {
+    const sa = scores.get(a.sigunguCode) ?? 0;
+    const sb = scores.get(b.sigunguCode) ?? 0;
+    if (Math.abs(sb - sa) > 1e-6) return sb - sa;
+    return a.sigunguCode.localeCompare(b.sigunguCode);
+  });
+
+  return { ranked, scores };
+}
+
+function scoreCandidateRelevance(
+  candidate: PublicRestroomCandidateSummary,
+  hints: ViewportOfficialHints,
+  regionOrder: ReadonlyMap<string, number>
+): number {
+  let score = 0;
+  const regionIdx = regionOrder.get(candidate.sigungu_code) ?? 15;
+  score += Math.max(0, 24 - regionIdx * 6);
+
+  const candDong =
+    candidate.eupmyeondong_name ||
+    extractEupMyeonDongName(candidate.road_address, candidate.jibun_address);
+  if (candDong) {
+    const dongWeight = hints.dongWeights.get(candDong) ?? 0;
+    score += dongWeight > 0 ? Math.min(85, 42 + dongWeight * 12) : 2;
+    if (hints.hasUrbanDongHint) {
+      if (/(?:동|가)$/u.test(candDong)) score += 20;
+      else if (/(?:읍|면)$/u.test(candDong)) score -= 22;
+    } else if (hints.hasRuralTownHint) {
+      if (/(?:읍|면)$/u.test(candDong)) score += 16;
+    }
+    // 도로명 접두어(예: 태화1길 -> 태화동) 일치 보너스
+    const dongStem = candDong.replace(/(?:동|읍|면|가|\d+동)$/u, "");
+    if (dongStem.length >= 2) {
+      for (const [road, w] of hints.roadWeights.entries()) {
+        if (road.startsWith(dongStem)) {
+          score += Math.min(35, 18 + w * 4);
+          break;
+        }
+      }
+    }
+  }
+
+  const candRoad = extractRoadStem(candidate.road_address);
+  if (candRoad) {
+    const roadWeight = hints.roadWeights.get(candRoad) ?? 0;
+    if (roadWeight > 0) {
+      score += Math.min(70, 32 + roadWeight * 12);
+    }
+  }
+
+  const fullAddr = `${candidate.road_address || ""} ${candidate.jibun_address || ""}`.trim();
+  if (/(?:로|길|동|리|가)\s*(?:지하\s*)?(?:산\s*)?\d+(?:-\d+)?/u.test(fullAddr)) {
+    score += 12;
+  } else {
+    score -= 6;
+  }
+  if (candidate.eupmyeondong_name) {
+    score += 4;
+  }
+
+  return score;
 }
 
 export async function listViewportUnlocatedCandidates(
@@ -136,35 +378,33 @@ export async function listViewportUnlocatedCandidates(
   params: ListViewportCandidatesParams
 ): Promise<CandidateViewportResponse> {
   const limit = Math.min(Math.max(params.limit ?? 20, 1), 40);
+  const parsedCursor = parseCandidateCursor(params.cursor);
+  const excludeSet = new Set(params.excludeIds ?? []);
+  const deltaExcluded = Math.max(0, excludeSet.size - parsedCursor.excludeCount);
+  const offset = Math.max(0, parsedCursor.offset - deltaExcluded);
   const regionResult = findIntersectingAdminRegions(params.bounds);
-  const viewCenterLat = (params.bounds.south + params.bounds.north) / 2;
-  const viewCenterLng = (params.bounds.west + params.bounds.east) / 2;
-
-  // 지도 중심에서 가장 가까운 시군구 순으로 정렬 (사전순 sigungu_code 편향 방지)
-  const regions = [...regionResult.regions].sort((a, b) => {
-    const aLat = (a.south + a.north) / 2;
-    const aLng = (a.west + a.east) / 2;
-    const bLat = (b.south + b.north) / 2;
-    const bLng = (b.west + b.east) / 2;
-    const distA = (aLat - viewCenterLat) ** 2 + (aLng - viewCenterLng) ** 2;
-    const distB = (bLat - viewCenterLat) ** 2 + (bLng - viewCenterLng) ** 2;
-    return distA - distB || a.sigunguCode.localeCompare(b.sigunguCode);
-  });
-  const regionCodes = regions.map((r) => r.sigunguCode);
-  const regionNames = regions.map((r) => `${r.sidoName} ${r.sigunguName}`);
+  const initialRanked = rankRegionsForViewport(
+    regionResult.regions,
+    params.bounds,
+    new Map()
+  ).ranked;
 
   if (
     regionResult.tooWide ||
     isViewportTooWideForCandidates(params.bounds) ||
-    regions.length === 0 ||
-    regions.length > MAX_INTERSECTING_REGIONS
+    initialRanked.length === 0 ||
+    initialRanked.length > MAX_INTERSECTING_REGIONS
   ) {
+    const regionCodes = initialRanked.map((r) => r.sigunguCode);
+    const regionNames = initialRanked.map((r) => `${r.sidoName} ${r.sigunguName}`);
     return {
       items: [],
       regionCodes,
       regionNames,
       tooWide: true,
       totalReturned: 0,
+      nextCursor: null,
+      hasMore: false,
     };
   }
 
@@ -172,7 +412,60 @@ export async function listViewportUnlocatedCandidates(
   const client = supabase as any;
   const normQ = sanitizePostgrestToken(normalizeCandidateSearchText(params.q));
 
-  const buildCandidateQuery = (codes: string[], maxRows: number) => {
+  // 1) 화면 내/인접 공식 DB 화장실을 먼저 조회해 현재 뷰포트의 실제 시군구·읍면동·도로명 힌트를 추출
+  const officialQuery = client
+    .from("restrooms")
+    .select("name, road_address, latitude, longitude")
+    .eq("publication_status", "published")
+    .gte("latitude", params.bounds.south - 0.01)
+    .lte("latitude", params.bounds.north + 0.01)
+    .gte("longitude", params.bounds.west - 0.01)
+    .lte("longitude", params.bounds.east + 0.01)
+    .limit(300);
+
+  const offRes = await officialQuery;
+  const officials = ((offRes.data || []) as OfficialRowHint[]).filter(
+    (o) => typeof o.name === "string"
+  );
+  const hints = buildViewportOfficialHints(officials, params.bounds);
+  const { ranked: regions, scores: regionScores } = rankRegionsForViewport(
+    regionResult.regions,
+    params.bounds,
+    hints.sigunguCounts
+  );
+
+  const regionCodes = regions.map((r) => r.sigunguCode);
+  const regionNames = regions.map((r) => `${r.sidoName} ${r.sigunguName}`);
+  const topRegionScore = regionScores.get(regionCodes[0]) ?? 0;
+
+  // 경계 영역에서 1개 시군구에 쏠리지 않도록 공식 핀이 확인되었거나 교차 비율이 높은 시군구(최대 3개)를 primaryCodes로 포함
+  const primaryCodes = regions
+    .filter((r, idx) => {
+      if (idx === 0) return true;
+      if (idx >= 3) return false;
+      const sc = regionScores.get(r.sigunguCode) ?? 0;
+      const officialHit = hints.sigunguCounts.get(compactRegionToken(r.sigunguName)) ?? 0;
+      const overlap = computeRegionOverlapRatio(r, params.bounds);
+      if (hints.sigunguCounts.size > 0 && officialHit === 0) {
+        return false;
+      }
+      return officialHit > 0 || overlap >= 0.35 || (topRegionScore > 0 && sc >= topRegionScore * 0.55);
+    })
+    .map((r) => r.sigunguCode);
+  const adjacentCodes = regionCodes.filter((c) => !primaryCodes.includes(c));
+
+  const hintedDongs = Array.from(hints.dongWeights.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 16)
+    .map(([dong]) => dong);
+
+  const excludeArr = Array.from(excludeSet).slice(0, 80);
+
+  const buildCandidateQuery = (
+    codes: string[],
+    maxRows: number,
+    emdFilter?: string[]
+  ) => {
     let q = client
       .from("public_restroom_candidates")
       .select(
@@ -205,7 +498,18 @@ export async function listViewportUnlocatedCandidates(
         ].join(", ")
       )
       .eq("coordinate_status", "unlocated")
-      .in("sigungu_code", codes)
+      .in("sigungu_code", codes);
+
+    if (emdFilter && emdFilter.length > 0) {
+      q = q.in("eupmyeondong_name", emdFilter);
+    }
+
+    if (excludeArr.length > 0 && typeof q.not === "function") {
+      const serialized = `(${excludeArr.map((id) => `"${id.replace(/"/g, "")}"`).join(",")})`;
+      q = q.not("id", "in", serialized);
+    }
+
+    q = q
       .order("sigungu_code", { ascending: true })
       .order("id", { ascending: true })
       .limit(maxRows);
@@ -218,55 +522,54 @@ export async function listViewportUnlocatedCandidates(
     return q;
   };
 
-  // 중심 시군구 우선 + 인접 시군구 병행 조회로 경계 누락·쏠림 모두 방지
-  const primaryCodes = regionCodes.slice(0, 1);
-  const adjacentCodes = regionCodes.slice(1);
-  const primaryFetchLimit = Math.min(limit * 3, 90);
+  const perPrimaryLimit = Math.min(Math.max((limit + offset) * 4, 80), 150);
+  const emdFetchLimit = Math.min(Math.max((limit + offset) * 3, 60), 150);
   const adjacentFetchLimit = Math.min(limit * 2, 60);
 
-  const officialQuery = client
-    .from("restrooms")
-    .select("name, road_address")
-    .eq("publication_status", "published")
-    .gte("latitude", params.bounds.south - 0.01)
-    .lte("latitude", params.bounds.north + 0.01)
-    .gte("longitude", params.bounds.west - 0.01)
-    .lte("longitude", params.bounds.east + 0.01)
-    .limit(300);
-
-  const [primaryRes, adjacentRes, offRes] = await Promise.all([
-    buildCandidateQuery(primaryCodes, primaryFetchLimit),
-    adjacentCodes.length > 0
+  // 시군구 코드 사전순 쏠림(예: 11220 < 11230)을 막기 위해 primaryCodes 각각을 독립 조회
+  const primaryQueries = primaryCodes.map((code) =>
+    buildCandidateQuery([code], perPrimaryLimit)
+  );
+  const [primaryResults, emdRes, adjacentRes] = await Promise.all([
+    Promise.all(primaryQueries),
+    hintedDongs.length > 0
+      ? buildCandidateQuery(primaryCodes, emdFetchLimit, hintedDongs)
+      : Promise.resolve({ data: [], error: null }),
+    adjacentCodes.length > 0 && primaryCodes.length === 1
       ? buildCandidateQuery(adjacentCodes, adjacentFetchLimit)
       : Promise.resolve({ data: [], error: null }),
-    officialQuery,
   ]);
 
-  if (primaryRes.error) {
-    throw new Error(`후보 화장실 인덱스 조회 실패: ${primaryRes.error.message}`);
+  for (const res of primaryResults) {
+    if (res.error) {
+      throw new Error(`후보 화장실 인덱스 조회 실패: ${res.error.message}`);
+    }
+  }
+  if (emdRes.error) {
+    throw new Error(`읍면동 우선 후보 조회 실패: ${emdRes.error.message}`);
   }
   if (adjacentRes.error) {
     throw new Error(`인접 후보 화장실 인덱스 조회 실패: ${adjacentRes.error.message}`);
   }
 
   const regionOrder = new Map(regionCodes.map((c, idx) => [c, idx]));
-  const rawCandidates = [
-    ...((primaryRes.data || []) as Array<Record<string, unknown>>),
+  const combinedRaw = [
+    ...((emdRes.data || []) as Array<Record<string, unknown>>),
+    ...primaryResults.flatMap(
+      (res) => (res.data || []) as Array<Record<string, unknown>>
+    ),
     ...((adjacentRes.data || []) as Array<Record<string, unknown>>),
-  ].sort((a, b) => {
-    const rankA = regionOrder.get(String(a.sigungu_code ?? "")) ?? 999;
-    const rankB = regionOrder.get(String(b.sigungu_code ?? "")) ?? 999;
-    return rankA - rankB;
-  });
-  const officials = ((offRes.data || []) as Array<{ name: string; road_address: string | null }>).filter(
-    (o) => typeof o.name === "string"
-  );
+  ];
 
-  const items: PublicRestroomCandidateSummary[] = [];
   const seenCandidateIds = new Set<string>();
-  for (const row of rawCandidates) {
+  const scoredPool: Array<{
+    item: PublicRestroomCandidateSummary;
+    score: number;
+  }> = [];
+
+  for (const row of combinedRaw) {
     const candId = String(row.id);
-    if (seenCandidateIds.has(candId)) continue;
+    if (excludeSet.has(candId) || seenCandidateIds.has(candId)) continue;
     seenCandidateIds.add(candId);
 
     const mapped: PublicRestroomCandidateSummary = {
@@ -303,15 +606,68 @@ export async function listViewportUnlocatedCandidates(
       continue;
     }
 
-    items.push(mapped);
-    if (items.length >= limit) break;
+    scoredPool.push({
+      item: mapped,
+      score: scoreCandidateRelevance(mapped, hints, regionOrder),
+    });
   }
 
+  scoredPool.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    const rankA = regionOrder.get(a.item.sigungu_code) ?? 999;
+    const rankB = regionOrder.get(b.item.sigungu_code) ?? 999;
+    if (rankA !== rankB) return rankA - rankB;
+    return a.item.id.localeCompare(b.item.id);
+  });
+
+  // 복수 교차 시군구 경계일 때 상위 스코어 후보들을 시군구별로 균형 인터리빙
+  let orderedItems: PublicRestroomCandidateSummary[];
+  if (primaryCodes.length >= 2) {
+    const buckets = new Map<string, PublicRestroomCandidateSummary[]>();
+    for (const entry of scoredPool) {
+      const list = buckets.get(entry.item.sigungu_code) ?? [];
+      list.push(entry.item);
+      buckets.set(entry.item.sigungu_code, list);
+    }
+    const bucketKeys = [
+      ...primaryCodes.filter((c) => (buckets.get(c)?.length ?? 0) > 0),
+      ...adjacentCodes.filter((c) => (buckets.get(c)?.length ?? 0) > 0),
+    ];
+    orderedItems = [];
+    const pointers = new Map(bucketKeys.map((k) => [k, 0]));
+    while (orderedItems.length < scoredPool.length) {
+      let addedInRound = false;
+      for (const k of bucketKeys) {
+        const list = buckets.get(k);
+        const ptr = pointers.get(k) ?? 0;
+        if (list && ptr < list.length) {
+          orderedItems.push(list[ptr]);
+          pointers.set(k, ptr + 1);
+          addedInRound = true;
+        }
+      }
+      if (!addedInRound) break;
+    }
+  } else {
+    orderedItems = scoredPool.map((e) => e.item);
+  }
+
+  const pagedItems = orderedItems.slice(offset, offset + limit);
+  const nextOffset = offset + pagedItems.length;
+  const hitPrimaryCap = primaryResults.some(
+    (res) => (res.data?.length ?? 0) >= perPrimaryLimit
+  );
+  const hasMore =
+    nextOffset < orderedItems.length ||
+    (hitPrimaryCap && pagedItems.length === limit);
+
   return {
-    items,
+    items: pagedItems,
     regionCodes,
     regionNames,
     tooWide: false,
-    totalReturned: items.length,
+    totalReturned: pagedItems.length,
+    nextCursor: hasMore ? `o:${nextOffset}:x:${excludeSet.size}` : null,
+    hasMore,
   };
 }

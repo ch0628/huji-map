@@ -66,6 +66,10 @@ export interface CandidateResolverSessionState {
   rateLimited: boolean;
   /** 순수 메모리 캐시 (sessionStorage / localStorage / IndexedDB / DB 사용 금지) */
   memoryCache: Map<string, CachedCandidatePosition | null>;
+  /** 정상 검색 완료된 후보 ID (빈 결과 포함, 불필요한 재호출 방지용) */
+  completedIds?: Set<string>;
+  /** 타임아웃/네트워크 등 일시 실패 후보 ID (재시도 대상) */
+  transientFailedIds?: Set<string>;
 }
 
 export function createCandidateResolverSessionState(
@@ -78,6 +82,8 @@ export function createCandidateResolverSessionState(
     failedCount: 0,
     rateLimited: false,
     memoryCache: new Map(),
+    completedIds: new Set(),
+    transientFailedIds: new Set(),
   };
 }
 
@@ -85,6 +91,8 @@ export function clearCandidateResolverSessionState(
   state: CandidateResolverSessionState
 ): void {
   state.memoryCache.clear();
+  state.completedIds?.clear();
+  state.transientFailedIds?.clear();
 }
 
 export class KakaoRateLimitError extends Error {
@@ -107,16 +115,70 @@ function normalizeMatchText(value: string | null | undefined): string {
     .trim();
 }
 
-function cleanAddressForGeocoding(raw: string | null | undefined): string {
+function cleanAddressForGeocoding(
+  raw: string | null | undefined,
+  candidate?: Pick<PublicRestroomCandidateSummary, "sido_name" | "sigungu_name">
+): string {
   if (!raw) return "";
-  return raw
+  let cleaned = raw
     .normalize("NFKC")
     .replace(/\([^)]*\)/g, " ")
     .replace(/,\s*.*$/u, " ")
     .replace(/\s+\d+층.*$/u, " ")
     .replace(/\s+지하?\s*\d+층.*$/u, " ")
+    .replace(/([로길])\s*지하\s*(\d+(?:-\d+)?)/u, "$1 $2")
+    .replace(/([로길])(\d+(?:-\d+)?)(?=\s|$)/u, "$1 $2")
     .replace(/\s+/g, " ")
     .trim();
+
+  if (
+    candidate &&
+    cleaned.length >= 4 &&
+    candidate.sigungu_name &&
+    !cleaned.includes(candidate.sigungu_name.replace(/\s+/g, "")) &&
+    !cleaned.includes(candidate.sigungu_name) &&
+    !/^(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)/u.test(
+      cleaned
+    )
+  ) {
+    cleaned = `${candidate.sido_name} ${candidate.sigungu_name} ${cleaned}`.trim();
+  }
+
+  return cleaned;
+}
+
+const DISTINCTIVE_POI_NAME_RE =
+  /(?:공원|역|시장|주민센터|행정복지센터|복지센터|보건지소|보건소|도서관|체육관|문화센터|주차장|휴게소|선착장|구청|시청|군청|파출소|지구대|터미널|학교|병원|의료원|마트|백화점|박물관|미술관|복지관|회관|약수터|유원지|해수욕장|산책로|전망대)/u;
+
+const PURE_GENERIC_NAME_RE =
+  /^(?:(?:남녀공용|남여공용|공중|개방|간이|이동식|민간|유료|무료)\s*)*화장실(?:\s*(?:\d+호?|제\d+호?))?$/u;
+
+const DESCRIPTIVE_LOCATION_NAME_RE =
+  /(?:\d+리\s|건너|입구|좌측|우측|앞$|옆$|뒤$|삼거리|사거리|주유소|교회|성당|빌딩|상가|오피스텔|애니텔|프라자|타워)/u;
+
+function hasStreetOrLotNumber(address: string): boolean {
+  return /(?:로|길|동|리|가)\s*(?:산\s*)?\d+(?:-\d+)?(?:\s|,|$)/u.test(address);
+}
+
+function chooseSearchOrder(
+  candidate: PublicRestroomCandidateSummary,
+  cleanAddr: string
+): { primary: "keyword" | "address"; skipKeyword: boolean } {
+  const name = candidate.name.normalize("NFKC").trim();
+  const skipKeyword = PURE_GENERIC_NAME_RE.test(name);
+  if (skipKeyword && cleanAddr.length >= 5) {
+    return { primary: "address", skipKeyword: true };
+  }
+  const hasDistinctivePoi = DISTINCTIVE_POI_NAME_RE.test(name);
+  const hasNumberedAddress = cleanAddr.length >= 5 && hasStreetOrLotNumber(cleanAddr);
+  if (
+    hasNumberedAddress &&
+    !hasDistinctivePoi &&
+    (DESCRIPTIVE_LOCATION_NAME_RE.test(name) || name.length <= 12)
+  ) {
+    return { primary: "address", skipKeyword: false };
+  }
+  return { primary: "keyword", skipKeyword };
 }
 
 export function isCoordinateWithinBounds(
@@ -387,6 +449,8 @@ export interface ResolveCandidatesOptions {
   timeoutMs?: number;
   keywordSearchFn?: KakaoKeywordSearchAdapter;
   addressSearchFn?: KakaoAddressSearchAdapter;
+  /** 유효 참고 위치 1건 확인될 때마다 즉시 전달하는 점진 콜백 */
+  onResolvedItem?: (item: PublicRestroomSummary) => void;
 }
 
 export interface ResolveCandidatesResult {
@@ -398,6 +462,8 @@ export interface ResolveCandidatesResult {
   aborted: boolean;
   rateLimited: boolean;
   quotaExceeded: boolean;
+  completedIds?: string[];
+  transientFailedIds?: string[];
 }
 
 function toCandidateSummaryItem(
@@ -508,6 +574,14 @@ export async function resolveViewportCandidatesWithKakao(
   }
 
   const resolvedItems: PublicRestroomSummary[] = [];
+  const completedIds: string[] = [];
+  const transientFailedIds: string[] = [];
+  if (!sessionState.completedIds) sessionState.completedIds = new Set();
+  if (!sessionState.transientFailedIds) sessionState.transientFailedIds = new Set();
+
+  const inFlightKeyword = new Map<string, Promise<RawKakaoPlaceHit[]>>();
+  const inFlightAddress = new Map<string, Promise<RawKakaoAddressHit[]>>();
+
   let nextIndex = 0;
   let callsIssued = 0;
   let successCount = 0;
@@ -524,6 +598,64 @@ export async function resolveViewportCandidatesWithKakao(
   const isAbort = (err: unknown): boolean =>
     Boolean(signal?.aborted) || (err instanceof DOMException && err.name === "AbortError");
 
+  const runKeywordSearchOnce = async (placeQuery: string): Promise<RawKakaoPlaceHit[]> => {
+    const key = normalizeMatchText(placeQuery);
+    const existing = inFlightKeyword.get(key);
+    if (existing) {
+      return existing;
+    }
+    if (sessionState.callsUsed >= sessionState.maxSessionCalls) {
+      quotaExceeded = true;
+      return [];
+    }
+    sessionState.callsUsed += 1;
+    callsIssued += 1;
+    const p = createWithTimeout(keywordSearchFn!(placeQuery, bounds, signal), timeoutMs, signal);
+    inFlightKeyword.set(key, p);
+    try {
+      return await p;
+    } catch (err) {
+      inFlightKeyword.delete(key);
+      throw err;
+    }
+  };
+
+  const runAddressSearchOnce = async (cleanAddr: string): Promise<RawKakaoAddressHit[]> => {
+    const key = normalizeMatchText(cleanAddr);
+    const existing = inFlightAddress.get(key);
+    if (existing) {
+      return existing;
+    }
+    if (sessionState.callsUsed >= sessionState.maxSessionCalls) {
+      quotaExceeded = true;
+      return [];
+    }
+    sessionState.callsUsed += 1;
+    callsIssued += 1;
+    const p = createWithTimeout(addressSearchFn!(cleanAddr, signal), timeoutMs, signal);
+    inFlightAddress.set(key, p);
+    try {
+      return await p;
+    } catch (err) {
+      inFlightAddress.delete(key);
+      throw err;
+    }
+  };
+
+  const emitValidItem = (
+    candidate: PublicRestroomCandidateSummary,
+    pos: CachedCandidatePosition
+  ) => {
+    if (
+      isCoordinateWithinBounds(pos.lat, pos.lng, bounds) &&
+      !isResolvedCandidateDuplicateOfOfficial(candidate, pos.lat, pos.lng, officialRestrooms)
+    ) {
+      const summary = toCandidateSummaryItem(candidate, pos);
+      resolvedItems.push(summary);
+      options.onResolvedItem?.(summary);
+    }
+  };
+
   const worker = async () => {
     while (true) {
       if (signal?.aborted) {
@@ -539,17 +671,10 @@ export async function resolveViewportCandidatesWithKakao(
       // 1) 세션 내 메모리 캐시 재사용 (추가 API 호출 0)
       if (sessionState.memoryCache.has(candidate.id)) {
         const cached = sessionState.memoryCache.get(candidate.id);
-        if (
-          cached &&
-          isCoordinateWithinBounds(cached.lat, cached.lng, bounds) &&
-          !isResolvedCandidateDuplicateOfOfficial(
-            candidate,
-            cached.lat,
-            cached.lng,
-            officialRestrooms
-          )
-        ) {
-          resolvedItems.push(toCandidateSummaryItem(candidate, cached));
+        completedIds.push(candidate.id);
+        sessionState.completedIds?.add(candidate.id);
+        if (cached) {
+          emitValidItem(candidate, cached);
         }
         continue;
       }
@@ -560,75 +685,65 @@ export async function resolveViewportCandidatesWithKakao(
       }
 
       let found: CachedCandidatePosition | null = null;
+      const preferredRawAddr = hasStreetOrLotNumber(candidate.road_address || "")
+        ? candidate.road_address
+        : candidate.jibun_address || candidate.road_address;
+      const cleanAddr = cleanAddressForGeocoding(preferredRawAddr, candidate);
+      const placeQuery = `${candidate.sigungu_name} ${candidate.name}`.trim();
+      const strategy = chooseSearchOrder(candidate, cleanAddr);
 
-      try {
-        // 2) 주소 기반 Geocoder 우선 조회 (주소 대표 지점) 또는 장소명 검색 조합
-        // 장소명 키워드 검색(시설명 + 시군구)을 먼저 시도하여 시설 매칭 시 kakao_place로 구분
-        const placeQuery = `${candidate.sigungu_name} ${candidate.name}`.trim();
-        if (sessionState.callsUsed < sessionState.maxSessionCalls) {
-          sessionState.callsUsed += 1;
-          callsIssued += 1;
-
-          const placeHits = await createWithTimeout(
-            keywordSearchFn!(placeQuery, bounds, signal),
-            timeoutMs,
-            signal
-          );
-
-          const matchedPlace = placeHits.find(
-            (h) =>
-              isCoordinateWithinBounds(h.lat, h.lng, bounds) &&
-              doesPlaceResultMatchCandidate(candidate, h)
-          );
-
-          if (matchedPlace) {
-            found = {
-              lat: matchedPlace.lat,
-              lng: matchedPlace.lng,
-              precision: "kakao_place",
-              matchedRoadAddress:
-                matchedPlace.roadAddress || matchedPlace.jibunAddress || null,
-            };
-          }
-        } else {
-          quotaExceeded = true;
+      const tryKeyword = async () => {
+        if (strategy.skipKeyword || signal?.aborted || sessionState.rateLimited || quotaExceeded) {
           return;
         }
+        const placeHits = await runKeywordSearchOnce(placeQuery);
+        const matchedPlace = placeHits.find(
+          (h) =>
+            isCoordinateWithinBounds(h.lat, h.lng, bounds) &&
+            doesPlaceResultMatchCandidate(candidate, h)
+        );
+        if (matchedPlace) {
+          found = {
+            lat: matchedPlace.lat,
+            lng: matchedPlace.lng,
+            precision: "kakao_place",
+            matchedRoadAddress: matchedPlace.roadAddress || matchedPlace.jibunAddress || null,
+          };
+        }
+      };
 
-        // 3) 장소 미매칭 시 도로명/지번 주소 지오코딩 fallback (`kakao_address`)
-        if (!found && !signal?.aborted && !sessionState.rateLimited) {
-          const cleanAddr = cleanAddressForGeocoding(
-            candidate.road_address || candidate.jibun_address
-          );
-          if (cleanAddr.length >= 5) {
-            if (sessionState.callsUsed < sessionState.maxSessionCalls) {
-              sessionState.callsUsed += 1;
-              callsIssued += 1;
+      const tryAddress = async () => {
+        if (cleanAddr.length < 5 || signal?.aborted || sessionState.rateLimited || quotaExceeded) {
+          return;
+        }
+        const addrHits = await runAddressSearchOnce(cleanAddr);
+        const matchedAddr = addrHits.find(
+          (h) =>
+            isCoordinateWithinBounds(h.lat, h.lng, bounds) &&
+            doesAddressResultMatchCandidate(candidate, h.roadAddress, h.jibunAddress)
+        );
+        if (matchedAddr) {
+          found = {
+            lat: matchedAddr.lat,
+            lng: matchedAddr.lng,
+            precision: "kakao_address",
+            matchedRoadAddress: matchedAddr.roadAddress || matchedAddr.jibunAddress || null,
+          };
+        }
+      };
 
-              const addrHits = await createWithTimeout(
-                addressSearchFn!(cleanAddr, signal),
-                timeoutMs,
-                signal
-              );
-
-              const matchedAddr = addrHits.find(
-                (h) =>
-                  isCoordinateWithinBounds(h.lat, h.lng, bounds) &&
-                  doesAddressResultMatchCandidate(candidate, h.roadAddress, h.jibunAddress)
-              );
-
-              if (matchedAddr) {
-                found = {
-                  lat: matchedAddr.lat,
-                  lng: matchedAddr.lng,
-                  precision: "kakao_address",
-                  matchedRoadAddress:
-                    matchedAddr.roadAddress || matchedAddr.jibunAddress || null,
-                };
-              }
-            } else {
-              quotaExceeded = true;
-            }
+      try {
+        // 2) 후보의 주소/시설명 품질에 따라 addressSearch vs keywordSearch 동적 우선 실행
+        //    1차 검색에서 유효 좌표가 확보되면 2차 불필요 호출 생략
+        if (strategy.primary === "address") {
+          await tryAddress();
+          if (!found && !quotaExceeded && !signal?.aborted && !sessionState.rateLimited) {
+            await tryKeyword();
+          }
+        } else {
+          await tryKeyword();
+          if (!found && !quotaExceeded && !signal?.aborted && !sessionState.rateLimited) {
+            await tryAddress();
           }
         }
 
@@ -637,21 +752,21 @@ export async function resolveViewportCandidatesWithKakao(
           return;
         }
 
+        if (quotaExceeded && !found) {
+          transientFailedIds.push(candidate.id);
+          sessionState.transientFailedIds?.add(candidate.id);
+          return;
+        }
+
         sessionState.memoryCache.set(candidate.id, found);
+        sessionState.completedIds?.add(candidate.id);
+        sessionState.transientFailedIds?.delete(candidate.id);
+        completedIds.push(candidate.id);
 
         if (found) {
           successCount += 1;
           sessionState.successCount += 1;
-          if (
-            !isResolvedCandidateDuplicateOfOfficial(
-              candidate,
-              found.lat,
-              found.lng,
-              officialRestrooms
-            )
-          ) {
-            resolvedItems.push(toCandidateSummaryItem(candidate, found));
-          }
+          emitValidItem(candidate, found);
         }
       } catch (err) {
         if (isAbort(err)) {
@@ -660,6 +775,9 @@ export async function resolveViewportCandidatesWithKakao(
         }
         failedCount += 1;
         sessionState.failedCount += 1;
+        // 일시 실패(타임아웃/네트워크/429)는 memoryCache에 저장하지 않고 재시도 가능 상태로 분리
+        transientFailedIds.push(candidate.id);
+        sessionState.transientFailedIds?.add(candidate.id);
         if (isRateLimit(err)) {
           sessionState.rateLimited = true;
           return;
@@ -679,5 +797,7 @@ export async function resolveViewportCandidatesWithKakao(
     aborted,
     rateLimited: sessionState.rateLimited,
     quotaExceeded,
+    completedIds,
+    transientFailedIds,
   };
 }

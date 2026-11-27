@@ -268,6 +268,8 @@ export interface CandidateViewportResponse {
   regionNames: string[];
   tooWide: boolean;
   totalReturned: number;
+  nextCursor?: string | null;
+  hasMore?: boolean;
 }
 
 /**

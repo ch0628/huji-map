@@ -5,6 +5,7 @@ import {
   candidateViewportQuerySchema,
   listViewportUnlocatedCandidates,
   parseBBoxString,
+  parseCandidateExcludeIds,
 } from "@/lib/restrooms";
 
 export async function GET(request: Request) {
@@ -50,10 +51,13 @@ export async function GET(request: Request) {
   try {
     const supabase = await createServerClientInstance();
     const bounds = parseBBoxString(parsed.data.bbox);
+    const excludeIds = parseCandidateExcludeIds(parsed.data.excludeIds);
     const result = await listViewportUnlocatedCandidates(supabase, {
       bounds,
       q: parsed.data.q,
       limit: parsed.data.limit,
+      cursor: parsed.data.cursor,
+      excludeIds,
     });
 
     return NextResponse.json(

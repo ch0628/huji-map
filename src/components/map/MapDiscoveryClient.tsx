@@ -63,7 +63,11 @@ export interface MapDiscoveryClientProps {
   /** 지도 영역 좌표 미확보 후보 조회 함수 주입 (기본: /api/v1/restrooms/candidates) */
   readonly candidateFetchFn?: (
     bounds: MapBounds,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options?: {
+      cursor?: string | null;
+      excludeIds?: string[];
+    }
   ) => Promise<CandidateViewportResponse>;
   /** 후보 실시간 카카오 위치 보완 함수 주입 */
   readonly candidateResolveFn?: (
@@ -102,13 +106,23 @@ async function defaultRestroomSearch(
 
 async function defaultCandidateFetch(
   bounds: MapBounds,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: {
+    cursor?: string | null;
+    excludeIds?: string[];
+  }
 ): Promise<CandidateViewportResponse> {
   const bbox = `${bounds.south},${bounds.west},${bounds.north},${bounds.east}`;
   const params = new URLSearchParams({
     bbox,
     limit: "15",
   });
+  if (options?.cursor) {
+    params.set("cursor", options.cursor);
+  }
+  if (options?.excludeIds && options.excludeIds.length > 0) {
+    params.set("excludeIds", options.excludeIds.slice(0, 80).join(","));
+  }
   const res = await fetch(`/api/v1/restrooms/candidates?${params.toString()}`, {
     signal,
   });
@@ -208,6 +222,13 @@ export default function MapDiscoveryClient({
   const currentMapCenterRef = useRef<LatLng>(SUWON_DEFAULT_CENTER);
   const latestBoundsRef = useRef<MapBounds | null>(null);
   const rawRestroomsRef = useRef<PublicRestroomSummary[]>([]);
+  const candidateViewportStateRef = useRef<{
+    regionKey: string;
+    nextCursor: string | null;
+  }>({
+    regionKey: "",
+    nextCursor: null,
+  });
   const candidateSessionRef = useRef<CandidateResolverSessionState | null>(
     null
   );
@@ -364,12 +385,42 @@ export default function MapDiscoveryClient({
         return;
       }
 
+      const regionKey = [
+        targetBounds.south.toFixed(3),
+        targetBounds.west.toFixed(3),
+        targetBounds.north.toFixed(3),
+        targetBounds.east.toFixed(3),
+      ].join(",");
+      const isSameViewport =
+        candidateViewportStateRef.current.regionKey === regionKey;
+      const cursorToSend = isSameViewport
+        ? candidateViewportStateRef.current.nextCursor
+        : null;
+      if (!isSameViewport) {
+        candidateViewportStateRef.current = { regionKey, nextCursor: null };
+      }
+
+      // 기존 유효 참고 핀 중 현재 화면 영역 안에 남는 핀은 보존하고 영역 밖 핀만 정리
+      setCandidateRestrooms((prev) =>
+        prev.filter((item) =>
+          isCoordinateWithinBounds(item.latitude, item.longitude, targetBounds)
+        )
+      );
+
       setCandidateStatusNote("주소 기반 후보 화장실 위치를 확인하는 중...");
+
+      const sessionState = candidateSessionRef.current!;
+      const completedSet = sessionState.completedIds ?? new Set<string>();
+      const excludeIds = Array.from(completedSet).slice(-80);
 
       try {
         const candidateResp = await candidateFetchFn(
           targetBounds,
-          controller.signal
+          controller.signal,
+          {
+            cursor: cursorToSend,
+            excludeIds,
+          }
         );
         if (controller.signal.aborted || seq !== candidateSeqRef.current) {
           return;
@@ -383,17 +434,44 @@ export default function MapDiscoveryClient({
           return;
         }
 
+        candidateViewportStateRef.current = {
+          regionKey,
+          nextCursor: candidateResp.nextCursor ?? null,
+        };
+
         if (!candidateResp.items || candidateResp.items.length === 0) {
-          setCandidateRestrooms([]);
-          setCandidateStatusNote(null);
+          setCandidateRestrooms((prev) => {
+            const retained = prev.filter((item) =>
+              isCoordinateWithinBounds(item.latitude, item.longitude, targetBounds)
+            );
+            setCandidateStatusNote(
+              retained.length > 0
+                ? `공식 위치 외 주소 기반 참고 위치 ${retained.length}곳이 포함되었습니다.`
+                : null
+            );
+            return retained;
+          });
           return;
         }
 
         const resolved = await candidateResolveFn(candidateResp.items, {
           bounds: targetBounds,
           officialRestrooms: rawRestroomsRef.current,
-          sessionState: candidateSessionRef.current!,
+          sessionState,
           signal: controller.signal,
+          onResolvedItem: (item) => {
+            if (controller.signal.aborted || seq !== candidateSeqRef.current) {
+              return;
+            }
+            const activeBounds = latestBoundsRef.current ?? targetBounds;
+            if (!isCoordinateWithinBounds(item.latitude, item.longitude, activeBounds)) {
+              return;
+            }
+            setCandidateRestrooms((prev) => {
+              if (prev.some((p) => p.id === item.id)) return prev;
+              return [...prev, item];
+            });
+          },
         });
 
         if (
@@ -405,21 +483,36 @@ export default function MapDiscoveryClient({
         }
 
         const activeBounds = latestBoundsRef.current ?? targetBounds;
-        const inBoundsItems = resolved.items.filter((item) =>
+        const inBoundsNewItems = resolved.items.filter((item) =>
           isCoordinateWithinBounds(item.latitude, item.longitude, activeBounds)
         );
 
-        setCandidateRestrooms(inBoundsItems);
+        let totalMergedCount = inBoundsNewItems.length;
+        setCandidateRestrooms((prev) => {
+          const retained = prev.filter((item) =>
+            isCoordinateWithinBounds(item.latitude, item.longitude, activeBounds)
+          );
+          const mergedMap = new Map<string, PublicRestroomSummary>();
+          for (const item of retained) {
+            mergedMap.set(item.id, item);
+          }
+          for (const item of inBoundsNewItems) {
+            mergedMap.set(item.id, item);
+          }
+          const merged = Array.from(mergedMap.values());
+          totalMergedCount = merged.length;
+          return merged;
+        });
 
         if (resolved.rateLimited || resolved.quotaExceeded) {
           setCandidateStatusNote(
-            inBoundsItems.length > 0
-              ? `참고 위치 ${inBoundsItems.length}곳 표시 중 (실시간 조회 한도 도달로 일부 제한)`
+            totalMergedCount > 0
+              ? `참고 위치 ${totalMergedCount}곳 표시 중 (실시간 조회 한도 도달로 일부 제한)`
               : "실시간 위치 조회 한도에 도달해 공식 DB 화장실만 표시합니다."
           );
-        } else if (inBoundsItems.length > 0) {
+        } else if (totalMergedCount > 0) {
           setCandidateStatusNote(
-            `공식 위치 외 주소 기반 참고 위치 ${inBoundsItems.length}곳이 포함되었습니다.`
+            `공식 위치 외 주소 기반 참고 위치 ${totalMergedCount}곳이 포함되었습니다.`
           );
         } else if (resolved.failedCount > 0) {
           setCandidateStatusNote(
@@ -436,10 +529,21 @@ export default function MapDiscoveryClient({
         ) {
           return;
         }
-        setCandidateRestrooms([]);
-        setCandidateStatusNote(
-          "주소 기반 참고 위치를 불러오지 못해 공식 DB 화장실만 표시합니다."
-        );
+        setCandidateRestrooms((prev) => {
+          const retained = prev.filter((item) =>
+            isCoordinateWithinBounds(item.latitude, item.longitude, targetBounds)
+          );
+          if (retained.length > 0) {
+            setCandidateStatusNote(
+              `공식 위치 외 주소 기반 참고 위치 ${retained.length}곳이 포함되었습니다.`
+            );
+          } else {
+            setCandidateStatusNote(
+              "주소 기반 참고 위치를 불러오지 못해 공식 DB 화장실만 표시합니다."
+            );
+          }
+          return retained;
+        });
       }
     },
     [candidateFetchFn, candidateResolveFn]

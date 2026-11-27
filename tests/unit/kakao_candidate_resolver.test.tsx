@@ -269,6 +269,127 @@ describe("카카오 실시간 위치 보완 모듈 (TASK 5)", () => {
     expect(res.quotaExceeded).toBe(true);
     expect(kwSpy).not.toHaveBeenCalled();
   });
+
+  it("주소 품질에 따라 addressSearch/keywordSearch 순서를 동적으로 선택하고 일시 실패만 재시도 대상으로 분리한다", async () => {
+    const sessionState = createCandidateResolverSessionState(20);
+    const callLog: string[] = [];
+    const streamedIds: string[] = [];
+
+    // 1) 번호 있는 도로명 주소 + 일반 건물명 -> addressSearch 먼저 1회만 호출 (keywordSearch 생략)
+    const addrFirstCand = makeCandidate({
+      id: "cand-addr-first",
+      name: "삼성애니텔",
+      road_address: "경기도 수원시 팔달구 효원로 255, 삼성애니텔 (인계동)",
+    });
+    // 2) 고유 POI(공원) -> keywordSearch 먼저 1회만 호출 (addressSearch 생략)
+    const poiFirstCand = makeCandidate({
+      id: "cand-poi-first",
+      name: "효원공원 공중화장실",
+      road_address: "경기도 수원시 팔달구 동수원로 397",
+    });
+    // 3) 동일 주소 중복 후보 -> 배치 내 중복 API 호출 0회
+    const dupQueryCand = makeCandidate({
+      id: "cand-dup-query",
+      name: "공중화장실",
+      road_address: "경기도 수원시 팔달구 효원로 255",
+    });
+    // 4) 일시 오류(네트워크 실패) -> memoryCache에 null 고정되지 않고 transientFailedIds로 추적되어 재시도 가능
+    const transientCand = makeCandidate({
+      id: "cand-transient",
+      name: "임시 실패 공중화장실",
+      road_address: "경기도 수원시 팔달구 인계로 199",
+    });
+
+    let transientAttempts = 0;
+    const firstPass = await resolveViewportCandidatesWithKakao(
+      [addrFirstCand, poiFirstCand, dupQueryCand, transientCand],
+      {
+        bounds: TEST_BOUNDS,
+        officialRestrooms: [],
+        sessionState,
+        onResolvedItem: (item) => streamedIds.push(item.id),
+        keywordSearchFn: async (q) => {
+          callLog.push(`kw:${q}`);
+          if (q.includes("효원공원")) {
+            return [
+              {
+                name: "효원공원 공중화장실",
+                roadAddress: "경기 수원시 팔달구 동수원로 397",
+                jibunAddress: "",
+                lat: 37.262,
+                lng: 127.033,
+              },
+            ];
+          }
+          return [];
+        },
+        addressSearchFn: async (addr) => {
+          callLog.push(`addr:${addr}`);
+          if (addr.includes("199")) {
+            transientAttempts += 1;
+            if (transientAttempts === 1) {
+              throw new Error("temporary network timeout");
+            }
+            return [
+              {
+                roadAddress: "경기 수원시 팔달구 인계로 199",
+                jibunAddress: "",
+                lat: 37.266,
+                lng: 127.034,
+              },
+            ];
+          }
+          return [
+            {
+              roadAddress: "경기 수원시 팔달구 효원로 255",
+              jibunAddress: "",
+              lat: 37.264,
+              lng: 127.031,
+            },
+          ];
+        },
+      }
+    );
+
+    expect(streamedIds).toContain("candidate:cand-addr-first");
+    expect(streamedIds).toContain("candidate:cand-poi-first");
+    // 효원로 255는 1회만 호출 (삼성애니텔은 address_first 1회, 공중화장실은 중복 공유로 0회)
+    expect(callLog.filter((c) => c.startsWith("addr:") && c.includes("255"))).toHaveLength(1);
+    expect(callLog.some((c) => c.startsWith("kw:") && c.includes("삼성애니텔"))).toBe(false);
+    expect(callLog.some((c) => c.startsWith("addr:") && c.includes("397"))).toBe(false);
+    expect(firstPass.transientFailedIds).toContain("cand-transient");
+    expect(sessionState.memoryCache.has("cand-transient")).toBe(false);
+
+    // 2차 재시도 시 일시 실패 후보는 정상 재조회되고 완료된 후보는 캐시 재사용(API 0회)
+    const callsBeforeRetry = sessionState.callsUsed;
+    const retryPass = await resolveViewportCandidatesWithKakao(
+      [addrFirstCand, transientCand],
+      {
+        bounds: TEST_BOUNDS,
+        officialRestrooms: [],
+        sessionState,
+        keywordSearchFn: async () => [],
+        addressSearchFn: async (addr) => {
+          if (addr.includes("199")) {
+            return [
+              {
+                roadAddress: "경기 수원시 팔달구 인계로 199",
+                jibunAddress: "",
+                lat: 37.266,
+                lng: 127.034,
+              },
+            ];
+          }
+          return [];
+        },
+      }
+    );
+    expect(retryPass.items.map((i) => i.id)).toEqual([
+      "candidate:cand-addr-first",
+      "candidate:cand-transient",
+    ]);
+    expect(sessionState.callsUsed - callsBeforeRetry).toBe(1);
+  });
 });
 
 describe("MapDiscoveryClient '이 지역 재검색' 통합 및 비동기 race/오류 방어 (TASK 6·7)", () => {
@@ -460,5 +581,108 @@ describe("MapDiscoveryClient '이 지역 재검색' 통합 및 비동기 race/�
     });
     expect(screen.getByText("이 지역 화장실 2곳")).toBeTruthy();
     expect(screen.queryByTestId("api-error-banner")).toBeNull();
+  });
+
+  it("동일 영역 재검색 시 excludeIds/cursor를 전달하고 유효한 기존 참고 핀을 유지한 채 신규 핀을 점진 추가한다", async () => {
+    const harness = createTestMapProvider(TEST_BOUNDS);
+    const fetchOpts: Array<{ cursor?: string | null; excludeIds?: string[] } | undefined> = [];
+
+    const candidateFetchFn = vi.fn(
+      async (
+        _bounds: MapBounds,
+        _signal?: AbortSignal,
+        opts?: { cursor?: string | null; excludeIds?: string[] }
+      ) => {
+        fetchOpts.push(opts);
+        if (fetchOpts.length === 1) {
+          return {
+            items: [
+              makeCandidate({
+                id: "page1-cand",
+                name: "1차 인계 화장실",
+                road_address: "경기도 수원시 팔달구 효원로 270",
+              }),
+            ],
+            regionCodes: ["41115"],
+            regionNames: ["경기도 수원시 팔달구"],
+            tooWide: false,
+            totalReturned: 1,
+            nextCursor: "o:1",
+            hasMore: true,
+          };
+        }
+        return {
+          items: [
+            makeCandidate({
+              id: "page2-cand",
+              name: "2차 매탄 화장실",
+              road_address: "경기도 수원시 팔달구 인계로 190",
+            }),
+          ],
+          regionCodes: ["41115"],
+          regionNames: ["경기도 수원시 팔달구"],
+          tooWide: false,
+          totalReturned: 1,
+          nextCursor: null,
+          hasMore: false,
+        };
+      }
+    );
+
+    const candidateResolveFn = vi.fn(async (items, options) => {
+      return resolveViewportCandidatesWithKakao(items, {
+        ...options,
+        keywordSearchFn: async () => [],
+        addressSearchFn: async (addr) => {
+          if (addr.includes("190")) {
+            return [
+              {
+                roadAddress: "경기도 수원시 팔달구 인계로 190",
+                jibunAddress: "",
+                lat: 37.267,
+                lng: 127.035,
+              },
+            ];
+          }
+          return [
+            {
+              roadAddress: "경기도 수원시 팔달구 효원로 270",
+              jibunAddress: "",
+              lat: 37.263,
+              lng: 127.031,
+            },
+          ];
+        },
+      });
+    });
+
+    render(
+      React.createElement(MapDiscoveryClient, {
+        providerFactory: () => harness.provider,
+        candidateFetchFn,
+        candidateResolveFn,
+      })
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("이 지역 화장실 2곳")).toBeTruthy();
+    });
+
+    // 1차 재검색
+    fireEvent.click(screen.getByTestId("map-zoom-out-btn"));
+    fireEvent.click(screen.getByTestId("search-this-area-btn"));
+    await waitFor(() => {
+      expect(screen.getByText("이 지역 화장실 3곳")).toBeTruthy();
+    });
+
+    // 같은 영역에서 2차 재검색 (zoom-in 후 원래 bounds 유지 시나리오)
+    fireEvent.click(screen.getByTestId("map-zoom-in-btn"));
+    fireEvent.click(screen.getByTestId("search-this-area-btn"));
+
+    await waitFor(() => {
+      expect(screen.getByText("이 지역 화장실 4곳")).toBeTruthy();
+    });
+    expect(fetchOpts[1]?.cursor).toBe("o:1");
+    expect(fetchOpts[1]?.excludeIds).toContain("page1-cand");
   });
 });

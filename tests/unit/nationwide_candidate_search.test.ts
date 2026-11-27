@@ -4,6 +4,7 @@ import {
   listViewportUnlocatedCandidates,
   isCandidateDuplicateOfOfficial,
   candidateViewportQuerySchema,
+  parseCandidateExcludeIds,
 } from "@/lib/restrooms";
 import { getAdminRestroomStats } from "@/lib/restrooms/admin-inventory-service";
 
@@ -308,5 +309,133 @@ describe("전국 후보 지역 인덱스 탐색 및 중복 방지 (TASK 3·4)", 
     expect(queriedTables).not.toContain("public_restroom_candidates");
     expect(summary.totalCount).toBe(2);
     expect(summary.mapVisibleCount).toBe(2);
+  });
+
+  it("뷰포트 내 공식 핀의 읍면동·시군구 힌트로 관련 후보를 우선 선택하고 cursor/excludeIds로 중복 없는 반복 순환을 지원한다", async () => {
+    const makeCand = (
+      id: string,
+      sigunguCode: string,
+      sigunguName: string,
+      dong: string,
+      name: string,
+      road: string
+    ) => ({
+      id,
+      source_provider: "전국표준데이터",
+      source_dataset_id: "15012892",
+      source_record_id: `REC-${id}`,
+      name,
+      normalized_name: name,
+      road_address: road,
+      jibun_address: null,
+      normalized_address: road,
+      sido_code: "31",
+      sigungu_code: sigunguCode,
+      eupmyeondong_code: null,
+      sido_name: "경기도",
+      sigungu_name: sigunguName,
+      eupmyeondong_name: dong,
+      facility_type: "공중화장실",
+      open_hours: "24시간",
+      closed_days: "연중무휴",
+      gender_type: "separate",
+      wheelchair_accessible: false,
+      baby_changing_available: false,
+      coordinate_status: "unlocated",
+      facility_hash: `hash_${id}_000011112222`,
+      source_base_date: "2026-06-30",
+      attribution_text: "경기도",
+    });
+
+    const candidateRows = [
+      makeCand("0001-remote", "31013", "수원시팔달구", "화서동", "화서 외곽 공중화장실", "경기도 수원시 팔달구 화서로 10"),
+      makeCand("0002-ingye-1", "31013", "수원시팔달구", "인계동", "인계동 제1공중화장실", "경기도 수원시 팔달구 효원로 265"),
+      makeCand("0003-ingye-2", "31013", "수원시팔달구", "인계동", "인계동 제2공중화장실", "경기도 수원시 팔달구 인계로 180"),
+      makeCand("0004-yeongtong", "31014", "수원시영통구", "매탄동", "매탄공원 화장실", "경기도 수원시 영통구 효원로 350"),
+    ];
+
+    const officialRows = [
+      {
+        name: "수원시청 공식 화장실",
+        road_address: "경기도 수원시 팔달구 효원로 241 (인계동)",
+        latitude: 37.2635,
+        longitude: 127.0286,
+      },
+      {
+        name: "매탄 중심 공식 화장실",
+        road_address: "경기도 수원시 영통구 매탄동 100",
+        latitude: 37.265,
+        longitude: 127.042,
+      },
+    ];
+
+    const createMockDb = () => ({
+      from: (table: string) => {
+        const src = table === "public_restroom_candidates" ? candidateRows : officialRows;
+        const filters: Array<(r: Record<string, unknown>) => boolean> = [];
+        let maxLimit = 100;
+        const b = {
+          select: () => b,
+          eq: (col: string, val: unknown) => {
+            if (col !== "publication_status") {
+              filters.push((r) => r[col] === val);
+            }
+            return b;
+          },
+          in: (col: string, vals: unknown[]) => {
+            filters.push((r) => vals.includes(r[col]));
+            return b;
+          },
+          gte: () => b,
+          lte: () => b,
+          not: () => b,
+          or: () => b,
+          order: () => b,
+          limit: async (n: number) => {
+            maxLimit = n;
+            return {
+              data: src.filter((r) => filters.every((fn) => fn(r))).slice(0, maxLimit),
+              error: null,
+            };
+          },
+        };
+        return b;
+      },
+    }) as never;
+
+    const borderBounds = {
+      south: 37.255,
+      west: 127.02,
+      north: 37.272,
+      east: 127.05,
+    };
+
+    const page1 = await listViewportUnlocatedCandidates(createMockDb(), {
+      bounds: borderBounds,
+      limit: 2,
+    });
+    expect(page1.items).toHaveLength(2);
+    expect(page1.items.map((i) => i.id)).toContain("0002-ingye-1");
+    expect(page1.items.map((i) => i.id)).toContain("0004-yeongtong");
+    expect(page1.hasMore).toBe(true);
+    expect(page1.nextCursor).toBe("o:2:x:0");
+
+    // 2차 재검색: cursor + excludeIds 전달 시 이전 후보를 반복하지 않고 다음 미검색 후보 반환
+    const page2 = await listViewportUnlocatedCandidates(createMockDb(), {
+      bounds: borderBounds,
+      limit: 2,
+      cursor: page1.nextCursor ?? undefined,
+      excludeIds: page1.items.map((i) => i.id),
+    });
+    const page1Ids = new Set(page1.items.map((i) => i.id));
+    expect(page2.items.length).toBeGreaterThanOrEqual(1);
+    for (const item of page2.items) {
+      expect(page1Ids.has(item.id)).toBe(false);
+    }
+
+    // parseCandidateExcludeIds 검증 (중복 제거 및 비정상 토큰 차단)
+    expect(
+      parseCandidateExcludeIds("id-1, id-2, id-1, bad$id!, id_3")
+    ).toEqual(["id-1", "id-2", "id_3"]);
   });
 });
