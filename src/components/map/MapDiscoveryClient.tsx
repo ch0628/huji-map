@@ -121,7 +121,7 @@ async function defaultCandidateFetch(
     params.set("cursor", options.cursor);
   }
   if (options?.excludeIds && options.excludeIds.length > 0) {
-    params.set("excludeIds", options.excludeIds.slice(0, 80).join(","));
+    params.set("excludeIds", options.excludeIds.slice(-220).join(","));
   }
   const res = await fetch(`/api/v1/restrooms/candidates?${params.toString()}`, {
     signal,
@@ -222,13 +222,27 @@ export default function MapDiscoveryClient({
   const currentMapCenterRef = useRef<LatLng>(SUWON_DEFAULT_CENTER);
   const latestBoundsRef = useRef<MapBounds | null>(null);
   const rawRestroomsRef = useRef<PublicRestroomSummary[]>([]);
+  const lastFetchedFilterTypeRef = useRef<RestroomFilterType>(initialFilterType);
+  const candidateRestroomsRef = useRef<PublicRestroomSummary[]>([]);
   const candidateViewportStateRef = useRef<{
-    regionKey: string;
+    bounds: MapBounds | null;
     nextCursor: string | null;
   }>({
-    regionKey: "",
+    bounds: null,
     nextCursor: null,
   });
+
+  const commitCandidateRestrooms = useCallback(
+    (
+      updater: (prev: PublicRestroomSummary[]) => PublicRestroomSummary[]
+    ): PublicRestroomSummary[] => {
+      const next = updater(candidateRestroomsRef.current);
+      candidateRestroomsRef.current = next;
+      setCandidateRestrooms(next);
+      return next;
+    },
+    []
+  );
   const candidateSessionRef = useRef<CandidateResolverSessionState | null>(
     null
   );
@@ -306,7 +320,11 @@ export default function MapDiscoveryClient({
 
   // 중심 좌표 기반 주변 화장실 단일 API 요청 (거리순 최대 100건)
   const fetchRestrooms = useCallback(
-    async (targetCenter: LatLng, targetType: RestroomFilterType) => {
+    async (
+      targetCenter: LatLng,
+      targetType: RestroomFilterType,
+      options?: { preserveInBounds?: boolean; activeBounds?: MapBounds }
+    ) => {
       // 진행 중인 이전 요청 취소
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
@@ -342,13 +360,34 @@ export default function MapDiscoveryClient({
           ? json.data.items
           : [];
         const seen = new Set<string>();
-        const items = rawItems.filter((r) =>
+        const freshItems = rawItems.filter((r) =>
           seen.has(r.id) ? false : (seen.add(r.id), true)
         );
+
+        let finalItems = freshItems;
+        if (
+          options?.preserveInBounds &&
+          options.activeBounds &&
+          lastFetchedFilterTypeRef.current === targetType
+        ) {
+          const retainedInBounds = rawRestroomsRef.current.filter((r) =>
+            isCoordinateWithinBounds(r.latitude, r.longitude, options.activeBounds!)
+          );
+          const mergedMap = new Map<string, PublicRestroomSummary>();
+          for (const prevItem of retainedInBounds) {
+            mergedMap.set(prevItem.id, prevItem);
+          }
+          for (const nextItem of freshItems) {
+            mergedMap.set(nextItem.id, nextItem);
+          }
+          finalItems = Array.from(mergedMap.values());
+        }
+
+        lastFetchedFilterTypeRef.current = targetType;
         setSearchedCenter(targetCenter);
-        rawRestroomsRef.current = items;
-        setRawRestrooms(items);
-        onRestroomsLoaded?.(items);
+        rawRestroomsRef.current = finalItems;
+        setRawRestrooms(finalItems);
+        onRestroomsLoaded?.(finalItems);
       } catch (err: any) {
         if (
           err?.name === "AbortError" ||
@@ -378,40 +417,46 @@ export default function MapDiscoveryClient({
       const seq = ++candidateSeqRef.current;
 
       if (isBoundsTooWideForCandidates(targetBounds)) {
-        setCandidateRestrooms([]);
+        commitCandidateRestrooms(() => []);
         setCandidateStatusNote(
           "지도를 더 확대하면 주소 기반 참고 화장실도 함께 조회할 수 있습니다."
         );
         return;
       }
 
-      const regionKey = [
-        targetBounds.south.toFixed(3),
-        targetBounds.west.toFixed(3),
-        targetBounds.north.toFixed(3),
-        targetBounds.east.toFixed(3),
-      ].join(",");
-      const isSameViewport =
-        candidateViewportStateRef.current.regionKey === regionKey;
-      const cursorToSend = isSameViewport
-        ? candidateViewportStateRef.current.nextCursor
-        : null;
-      if (!isSameViewport) {
-        candidateViewportStateRef.current = { regionKey, nextCursor: null };
-      }
-
-      // 기존 유효 참고 핀 중 현재 화면 영역 안에 남는 핀은 보존하고 영역 밖 핀만 정리
-      setCandidateRestrooms((prev) =>
-        prev.filter((item) =>
-          isCoordinateWithinBounds(item.latitude, item.longitude, targetBounds)
-        )
+      const prevBounds = candidateViewportStateRef.current.bounds;
+      const isSameViewport = Boolean(
+        prevBounds &&
+          Math.abs(prevBounds.south - targetBounds.south) < 0.0005 &&
+          Math.abs(prevBounds.west - targetBounds.west) < 0.0005 &&
+          Math.abs(prevBounds.north - targetBounds.north) < 0.0005 &&
+          Math.abs(prevBounds.east - targetBounds.east) < 0.0005
       );
+
+      // 동일 영역 재검색 시 기존 유효 핀은 모두 유지하고, 영역 이동 시에만 범위 밖 핀만 정리
+      if (!isSameViewport) {
+        candidateViewportStateRef.current = { bounds: targetBounds, nextCursor: null };
+        commitCandidateRestrooms((prev) =>
+          prev.filter((item) =>
+            isCoordinateWithinBounds(item.latitude, item.longitude, targetBounds)
+          )
+        );
+      }
 
       setCandidateStatusNote("주소 기반 후보 화장실 위치를 확인하는 중...");
 
       const sessionState = candidateSessionRef.current!;
       const completedSet = sessionState.completedIds ?? new Set<string>();
-      const excludeIds = Array.from(completedSet).slice(-80);
+      const excludeIds = Array.from(completedSet).slice(-220);
+      const deferredIds = Array.from(sessionState.transientFailedIds ?? [])
+        .filter((id) => !completedSet.has(id))
+        .slice(-50);
+      const cursorToSend =
+        deferredIds.length > 0
+          ? `d:${deferredIds.join(",")}`
+          : isSameViewport
+            ? candidateViewportStateRef.current.nextCursor
+            : null;
 
       try {
         const candidateResp = await candidateFetchFn(
@@ -427,7 +472,7 @@ export default function MapDiscoveryClient({
         }
 
         if (candidateResp.tooWide) {
-          setCandidateRestrooms([]);
+          commitCandidateRestrooms(() => []);
           setCandidateStatusNote(
             "지도 영역이 넓어 공식 DB 화장실만 표시합니다. 확대 후 다시 검색해 주세요."
           );
@@ -435,22 +480,23 @@ export default function MapDiscoveryClient({
         }
 
         candidateViewportStateRef.current = {
-          regionKey,
+          bounds: targetBounds,
           nextCursor: candidateResp.nextCursor ?? null,
         };
 
         if (!candidateResp.items || candidateResp.items.length === 0) {
-          setCandidateRestrooms((prev) => {
-            const retained = prev.filter((item) =>
-              isCoordinateWithinBounds(item.latitude, item.longitude, targetBounds)
-            );
-            setCandidateStatusNote(
-              retained.length > 0
-                ? `공식 위치 외 주소 기반 참고 위치 ${retained.length}곳이 포함되었습니다.`
-                : null
-            );
-            return retained;
-          });
+          const retained = isSameViewport
+            ? candidateRestroomsRef.current
+            : commitCandidateRestrooms((prev) =>
+                prev.filter((item) =>
+                  isCoordinateWithinBounds(item.latitude, item.longitude, targetBounds)
+                )
+              );
+          setCandidateStatusNote(
+            retained.length > 0
+              ? `공식 위치 외 주소 기반 참고 위치 ${retained.length}곳이 포함되었습니다.`
+              : null
+          );
           return;
         }
 
@@ -464,10 +510,13 @@ export default function MapDiscoveryClient({
               return;
             }
             const activeBounds = latestBoundsRef.current ?? targetBounds;
-            if (!isCoordinateWithinBounds(item.latitude, item.longitude, activeBounds)) {
+            if (
+              !isSameViewport &&
+              !isCoordinateWithinBounds(item.latitude, item.longitude, activeBounds)
+            ) {
               return;
             }
-            setCandidateRestrooms((prev) => {
+            commitCandidateRestrooms((prev) => {
               if (prev.some((p) => p.id === item.id)) return prev;
               return [...prev, item];
             });
@@ -483,15 +532,18 @@ export default function MapDiscoveryClient({
         }
 
         const activeBounds = latestBoundsRef.current ?? targetBounds;
-        const inBoundsNewItems = resolved.items.filter((item) =>
-          isCoordinateWithinBounds(item.latitude, item.longitude, activeBounds)
+        const inBoundsNewItems = resolved.items.filter(
+          (item) =>
+            isSameViewport ||
+            isCoordinateWithinBounds(item.latitude, item.longitude, activeBounds)
         );
 
-        let totalMergedCount = inBoundsNewItems.length;
-        setCandidateRestrooms((prev) => {
-          const retained = prev.filter((item) =>
-            isCoordinateWithinBounds(item.latitude, item.longitude, activeBounds)
-          );
+        const merged = commitCandidateRestrooms((prev) => {
+          const retained = isSameViewport
+            ? prev
+            : prev.filter((item) =>
+                isCoordinateWithinBounds(item.latitude, item.longitude, activeBounds)
+              );
           const mergedMap = new Map<string, PublicRestroomSummary>();
           for (const item of retained) {
             mergedMap.set(item.id, item);
@@ -499,10 +551,9 @@ export default function MapDiscoveryClient({
           for (const item of inBoundsNewItems) {
             mergedMap.set(item.id, item);
           }
-          const merged = Array.from(mergedMap.values());
-          totalMergedCount = merged.length;
-          return merged;
+          return Array.from(mergedMap.values());
         });
+        const totalMergedCount = merged.length;
 
         if (resolved.rateLimited || resolved.quotaExceeded) {
           setCandidateStatusNote(
@@ -529,24 +580,25 @@ export default function MapDiscoveryClient({
         ) {
           return;
         }
-        setCandidateRestrooms((prev) => {
-          const retained = prev.filter((item) =>
-            isCoordinateWithinBounds(item.latitude, item.longitude, targetBounds)
+        const retained = isSameViewport
+          ? candidateRestroomsRef.current
+          : commitCandidateRestrooms((prev) =>
+              prev.filter((item) =>
+                isCoordinateWithinBounds(item.latitude, item.longitude, targetBounds)
+              )
+            );
+        if (retained.length > 0) {
+          setCandidateStatusNote(
+            `공식 위치 외 주소 기반 참고 위치 ${retained.length}곳이 포함되었습니다.`
           );
-          if (retained.length > 0) {
-            setCandidateStatusNote(
-              `공식 위치 외 주소 기반 참고 위치 ${retained.length}곳이 포함되었습니다.`
-            );
-          } else {
-            setCandidateStatusNote(
-              "주소 기반 참고 위치를 불러오지 못해 공식 DB 화장실만 표시합니다."
-            );
-          }
-          return retained;
-        });
+        } else {
+          setCandidateStatusNote(
+            "주소 기반 참고 위치를 불러오지 못해 공식 DB 화장실만 표시합니다."
+          );
+        }
       }
     },
-    [candidateFetchFn, candidateResolveFn]
+    [candidateFetchFn, candidateResolveFn, commitCandidateRestrooms]
   );
 
   // 최초 마운트 시 현재 지도 중심 기준으로 1회만 조회 (공식 DB 핀 즉시 표시)
@@ -1010,19 +1062,23 @@ export default function MapDiscoveryClient({
       approximateBoundsFromCenter(targetCenter, zoomLevel);
     latestBoundsRef.current = activeBounds;
 
-    fetchRestrooms(targetCenter, filterType);
+    fetchRestrooms(targetCenter, filterType, {
+      preserveInBounds: true,
+      activeBounds,
+    });
     if (filterType !== "partner") {
       fetchAndResolveCandidates(activeBounds);
     } else {
-      setCandidateRestrooms([]);
+      commitCandidateRestrooms(() => []);
       setCandidateStatusNote(null);
     }
-  }, [fetchAndResolveCandidates, fetchRestrooms, filterType, zoomLevel]);
+  }, [commitCandidateRestrooms, fetchAndResolveCandidates, fetchRestrooms, filterType, zoomLevel]);
 
   // 줌 제어 핸들러 (자동 재조회 없이 수동 재검색 버튼 표시)
   const handleZoomIn = () => {
     const next = Math.max(1, zoomLevel - 1); // 카카오맵은 레벨이 작을수록 확대
     if (next !== zoomLevel) {
+      lastZoomRef.current = { zoom: next, at: Date.now() };
       setZoomLevel(next);
       setShowSearchHere(true);
     }
@@ -1031,6 +1087,7 @@ export default function MapDiscoveryClient({
   const handleZoomOut = () => {
     const next = Math.min(14, zoomLevel + 1);
     if (next !== zoomLevel) {
+      lastZoomRef.current = { zoom: next, at: Date.now() };
       setZoomLevel(next);
       setShowSearchHere(true);
     }

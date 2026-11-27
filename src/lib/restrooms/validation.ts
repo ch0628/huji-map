@@ -623,11 +623,11 @@ export const candidateViewportQuerySchema = z
       .min(1, "최소 1개 이상 조회해야 합니다.")
       .max(40, "한 화면에 최대 40개까지 후보를 조회할 수 있습니다.")
       .default(20),
-    cursor: z.string().trim().max(120, "cursor 길이가 허용 범위를 초과했습니다.").optional(),
+    cursor: z.string().trim().max(2400, "cursor 길이가 허용 범위를 초과했습니다.").optional(),
     excludeIds: z
       .string()
       .trim()
-      .max(4800, "excludeIds 길이가 허용 범위를 초과했습니다.")
+      .max(10000, "excludeIds 길이가 허용 범위를 초과했습니다.")
       .optional(),
   })
   .superRefine((data, ctx) => {
@@ -695,7 +695,7 @@ export function parseCandidateExcludeIds(raw?: string | null): string[] {
     if (!id || !SAFE_CANDIDATE_ID_RE.test(id) || seen.has(id)) continue;
     seen.add(id);
     out.push(id);
-    if (out.length >= 100) break;
+    if (out.length >= 220) break;
   }
   return out;
 }

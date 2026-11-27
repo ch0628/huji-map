@@ -685,4 +685,152 @@ describe("MapDiscoveryClient '이 지역 재검색' 통합 및 비동기 race/�
     expect(fetchOpts[1]?.cursor).toBe("o:1");
     expect(fetchOpts[1]?.excludeIds).toContain("page1-cand");
   });
+
+  it("동일 지역 재검색 시 신규 후보 없음·API 오류·호출 한도 소진에도 기존 공식 핀과 참고 핀 및 정확한 건수 안내를 유지한다", async () => {
+    const harness = createTestMapProvider(TEST_BOUNDS);
+    let restroomCallCount = 0;
+
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.startsWith("/api/v1/events") || url.startsWith("/api/v1/usage-counts")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.startsWith("/api/v1/restrooms?")) {
+        restroomCallCount += 1;
+        // 1차 로딩에는 공식 2곳, 이후 재검색에서는 반경 이동 등으로 0건 반환 시뮬레이션
+        const items = restroomCallCount === 1 ? [OFFICIAL_SUWON, OFFICIAL_PARTNER] : [];
+        return new Response(
+          JSON.stringify({ ok: true, data: { items } }),
+          { status: 200 }
+        );
+      }
+      return new Response(JSON.stringify({ ok: true, data: { items: [] } }), {
+        status: 200,
+      });
+    }) as typeof fetch;
+
+    let candCallNo = 0;
+    const candidateFetchFn = vi.fn(async () => {
+      candCallNo += 1;
+      if (candCallNo === 1) {
+        return {
+          items: [
+            makeCandidate({
+              id: "keep-cand-1",
+              name: "유지 대상 참고 화장실",
+              road_address: "경기도 수원시 팔달구 효원로 275",
+            }),
+          ],
+          regionCodes: ["41115"],
+          regionNames: ["경기도 수원시 팔달구"],
+          tooWide: false,
+          totalReturned: 1,
+          nextCursor: "o:1",
+          hasMore: true,
+        };
+      }
+      if (candCallNo === 2) {
+        // 2차: 신규 결과 0건
+        return {
+          items: [],
+          regionCodes: ["41115"],
+          regionNames: ["경기도 수원시 팔달구"],
+          tooWide: false,
+          totalReturned: 0,
+          nextCursor: null,
+          hasMore: false,
+        };
+      }
+      if (candCallNo === 3) {
+        // 3차: 호출 한도 소진 시뮬레이션
+        return {
+          items: [
+            makeCandidate({
+              id: "quota-cand-2",
+              name: "한도 소진 후보",
+              road_address: "경기도 수원시 팔달구 효원로 290",
+            }),
+          ],
+          regionCodes: ["41115"],
+          regionNames: ["경기도 수원시 팔달구"],
+          tooWide: false,
+          totalReturned: 1,
+          nextCursor: null,
+          hasMore: false,
+        };
+      }
+      // 4차: API 실패
+      throw new Error("network failure");
+    });
+
+    const candidateResolveFn = vi.fn(async (items, options) => {
+      if (candCallNo === 3) {
+        return {
+          items: [],
+          attemptedCount: items.length,
+          callsIssued: 0,
+          successCount: 0,
+          failedCount: 0,
+          aborted: false,
+          rateLimited: false,
+          quotaExceeded: true,
+          completedIds: [],
+          transientFailedIds: items.map((i: PublicRestroomCandidateSummary) => i.id),
+        };
+      }
+      return resolveViewportCandidatesWithKakao(items, {
+        ...options,
+        keywordSearchFn: async () => [],
+        addressSearchFn: async () => [
+          {
+            roadAddress: "경기도 수원시 팔달구 효원로 275",
+            jibunAddress: "",
+            lat: 37.263,
+            lng: 127.031,
+          },
+        ],
+      });
+    });
+
+    render(
+      React.createElement(MapDiscoveryClient, {
+        providerFactory: () => harness.provider,
+        candidateFetchFn,
+        candidateResolveFn,
+      })
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("이 지역 화장실 2곳")).toBeTruthy();
+    });
+
+    // 1차 재검색 -> 공식 2곳(화면 내 유지) + 참고 1곳 = 3곳
+    fireEvent.click(screen.getByTestId("map-zoom-out-btn"));
+    fireEvent.click(screen.getByTestId("search-this-area-btn"));
+    await waitFor(() => {
+      expect(screen.getByText("이 지역 화장실 3곳")).toBeTruthy();
+    });
+
+    // 2차 재검색(신규 0건) -> 기존 3곳 그대로 유지
+    fireEvent.click(screen.getByTestId("map-zoom-in-btn"));
+    fireEvent.click(screen.getByTestId("search-this-area-btn"));
+    await waitFor(() => expect(candidateFetchFn).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("이 지역 화장실 3곳")).toBeTruthy();
+
+    // 3차 재검색(호출 한도 소진) -> 기존 3곳 유지 + 정확한 참고 위치 1곳 한도 안내
+    fireEvent.click(screen.getByTestId("map-zoom-out-btn"));
+    fireEvent.click(screen.getByTestId("search-this-area-btn"));
+    await waitFor(() => expect(candidateFetchFn).toHaveBeenCalledTimes(3));
+    expect(screen.getByText("이 지역 화장실 3곳")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("bottom-sheet-toggle-btn"));
+    expect(screen.getByTestId("bottom-sheet-candidate-note").textContent).toContain(
+      "참고 위치 1곳 표시 중"
+    );
+
+    // 4차 재검색(API 실패) -> 기존 3곳 여전히 유지
+    fireEvent.click(screen.getByTestId("map-zoom-in-btn"));
+    fireEvent.click(screen.getByTestId("search-this-area-btn"));
+    await waitFor(() => expect(candidateFetchFn).toHaveBeenCalledTimes(4));
+    expect(screen.getByText("이 지역 화장실 3곳")).toBeTruthy();
+  });
 });

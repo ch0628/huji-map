@@ -135,20 +135,29 @@ export interface ListViewportCandidatesParams {
   excludeIds?: string[];
 }
 
-function parseCandidateCursor(cursor?: string): { offset: number; excludeCount: number } {
-  if (!cursor) return { offset: 0, excludeCount: 0 };
-  const full = cursor.trim().match(/^o:(\d+):x:(\d+)$/);
-  if (full) {
-    const offset = Math.min(Math.max(Number(full[1]) || 0, 0), 500);
-    const excludeCount = Math.min(Math.max(Number(full[2]) || 0, 0), 500);
-    return { offset, excludeCount };
+function parseCandidateCursor(cursor?: string): {
+  offset: number;
+  deferIds: Set<string>;
+} {
+  if (!cursor) return { offset: 0, deferIds: new Set() };
+  const trimmed = cursor.trim();
+  if (trimmed.startsWith("d:")) {
+    const deferIds = new Set(
+      trimmed
+        .slice(2)
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => /^[a-zA-Z0-9_:-]{1,64}$/.test(s))
+        .slice(0, 60)
+    );
+    return { offset: 0, deferIds };
   }
-  const simple = cursor.trim().match(/^o:(\d+)$/);
-  if (!simple) return { offset: 0, excludeCount: 0 };
-  const n = Number(simple[1]);
+  const full = trimmed.match(/^o:(\d+)(?::x:\d+)?$/);
+  if (!full) return { offset: 0, deferIds: new Set() };
+  const n = Number(full[1]);
   return {
     offset: Number.isFinite(n) && n >= 0 ? Math.min(n, 500) : 0,
-    excludeCount: 0,
+    deferIds: new Set(),
   };
 }
 
@@ -219,14 +228,14 @@ function buildViewportOfficialHints(
   );
   const inBoundsOfficials = hasAnyCoords
     ? officials.filter(
-        (o) =>
-          typeof o.latitude === "number" &&
-          typeof o.longitude === "number" &&
-          o.latitude >= bounds.south &&
-          o.latitude <= bounds.north &&
-          o.longitude >= bounds.west &&
-          o.longitude <= bounds.east
-      )
+      (o) =>
+        typeof o.latitude === "number" &&
+        typeof o.longitude === "number" &&
+        o.latitude >= bounds.south &&
+        o.latitude <= bounds.north &&
+        o.longitude >= bounds.west &&
+        o.longitude <= bounds.east
+    )
     : officials;
 
   const targetOfficials = inBoundsOfficials.length > 0 ? inBoundsOfficials : officials;
@@ -380,8 +389,9 @@ export async function listViewportUnlocatedCandidates(
   const limit = Math.min(Math.max(params.limit ?? 20, 1), 40);
   const parsedCursor = parseCandidateCursor(params.cursor);
   const excludeSet = new Set(params.excludeIds ?? []);
-  const deltaExcluded = Math.max(0, excludeSet.size - parsedCursor.excludeCount);
-  const offset = Math.max(0, parsedCursor.offset - deltaExcluded);
+  const deferSet = parsedCursor.deferIds;
+  // excludeIds가 함께 전달될 때는 이미 완료 후보를 제외했으므로 숫자 offset을 이중 적용하지 않는다
+  const offset = excludeSet.size > 0 || deferSet.size > 0 ? 0 : parsedCursor.offset;
   const regionResult = findIntersectingAdminRegions(params.bounds);
   const initialRanked = rankRegionsForViewport(
     regionResult.regions,
@@ -459,7 +469,7 @@ export async function listViewportUnlocatedCandidates(
     .slice(0, 16)
     .map(([dong]) => dong);
 
-  const excludeArr = Array.from(excludeSet).slice(0, 80);
+  const excludeArr = Array.from(excludeSet).slice(0, 220);
 
   const buildCandidateQuery = (
     codes: string[],
@@ -652,7 +662,14 @@ export async function listViewportUnlocatedCandidates(
     orderedItems = scoredPool.map((e) => e.item);
   }
 
-  const pagedItems = orderedItems.slice(offset, offset + limit);
+  const pagedItems = (
+    deferSet.size > 0
+      ? [
+          ...orderedItems.filter((item) => !deferSet.has(item.id)),
+          ...orderedItems.filter((item) => deferSet.has(item.id)),
+        ]
+      : orderedItems
+  ).slice(offset, offset + limit);
   const nextOffset = offset + pagedItems.length;
   const hitPrimaryCap = primaryResults.some(
     (res) => (res.data?.length ?? 0) >= perPrimaryLimit
@@ -661,13 +678,19 @@ export async function listViewportUnlocatedCandidates(
     nextOffset < orderedItems.length ||
     (hitPrimaryCap && pagedItems.length === limit);
 
+  const nextCursor = hasMore
+    ? excludeSet.size === 0 && deferSet.size === 0
+      ? `o:${nextOffset}`
+      : `o:0:x:${excludeSet.size}`
+    : null;
+
   return {
     items: pagedItems,
     regionCodes,
     regionNames,
     tooWide: false,
     totalReturned: pagedItems.length,
-    nextCursor: hasMore ? `o:${nextOffset}:x:${excludeSet.size}` : null,
+    nextCursor,
     hasMore,
   };
 }

@@ -418,9 +418,9 @@ describe("전국 후보 지역 인덱스 탐색 및 중복 방지 (TASK 3·4)", 
     expect(page1.items.map((i) => i.id)).toContain("0002-ingye-1");
     expect(page1.items.map((i) => i.id)).toContain("0004-yeongtong");
     expect(page1.hasMore).toBe(true);
-    expect(page1.nextCursor).toBe("o:2:x:0");
+    expect(page1.nextCursor).toBe("o:2");
 
-    // 2차 재검색: cursor + excludeIds 전달 시 이전 후보를 반복하지 않고 다음 미검색 후보 반환
+    // 2차 재검색: cursor + excludeIds 동시 전달 시 미검색 후보를 이중 건너뛰지 않고 다음 후보를 반환
     const page2 = await listViewportUnlocatedCandidates(createMockDb(), {
       bounds: borderBounds,
       limit: 2,
@@ -428,10 +428,23 @@ describe("전국 후보 지역 인덱스 탐색 및 중복 방지 (TASK 3·4)", 
       excludeIds: page1.items.map((i) => i.id),
     });
     const page1Ids = new Set(page1.items.map((i) => i.id));
-    expect(page2.items.length).toBeGreaterThanOrEqual(1);
+    expect(page2.items.length).toBe(2);
     for (const item of page2.items) {
       expect(page1Ids.has(item.id)).toBe(false);
     }
+
+    // 2-b) 일부만 완료(1건 excludeIds) + 나머지(1건 d:...) 지연(defer) 전달 시 미검색 후보가 건너뛰어지지 않고 먼저 반환
+    const firstDone = page1.items[0].id;
+    const firstFailed = page1.items[1].id;
+    const partialRetry = await listViewportUnlocatedCandidates(createMockDb(), {
+      bounds: borderBounds,
+      limit: 2,
+      cursor: `d:${firstFailed}`,
+      excludeIds: [firstDone],
+    });
+    expect(partialRetry.items.map((i) => i.id)).not.toContain(firstDone);
+    expect(partialRetry.items.map((i) => i.id)).toContain("0003-ingye-2");
+    expect(partialRetry.items.map((i) => i.id)).not.toContain(firstFailed);
 
     // parseCandidateExcludeIds 검증 (중복 제거 및 비정상 토큰 차단)
     expect(
