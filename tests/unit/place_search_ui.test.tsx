@@ -85,7 +85,7 @@ const createProvider = (): MapProvider & {
     setZoomLevel: vi.fn(),
     getBounds: vi
       .fn()
-      .mockReturnValue({ south: 37.25, west: 127.01, north: 37.27, east: 127.03 }),
+      .mockReturnValue({ south: 37.25, west: 127.00, north: 37.295, east: 127.03 }),
     fitBounds: vi.fn(),
     setMarkers: vi.fn(),
     addMarker: vi.fn(),

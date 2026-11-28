@@ -795,7 +795,7 @@ describe("TASK 18: Events UI Hooks & User Tracking Telemetry", () => {
         getBounds: vi.fn().mockReturnValue({
           south: 37.25,
           west: 127.01,
-          north: 37.27,
+          north: 37.295,
           east: 127.03,
         }),
         fitBounds: vi.fn(),

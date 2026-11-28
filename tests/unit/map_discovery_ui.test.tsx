@@ -427,7 +427,7 @@ describe("TASK 16: Map Discovery UI - Cards, Filters, BottomSheet, Directions & 
       getBounds: vi.fn().mockReturnValue({
         south: 37.25,
         west: 127.01,
-        north: 37.27,
+        north: 37.295,
         east: 127.03,
       }),
       fitBounds: vi.fn(),

@@ -140,8 +140,8 @@ async function run() {
           const lat = this._center.getLat();
           const lng = this._center.getLng();
           return new MockLatLngBounds(
-            new MockLatLng(lat - 0.015, lng - 0.02),
-            new MockLatLng(lat + 0.015, lng + 0.02)
+            new MockLatLng(lat - 0.02, lng - 0.02),
+            new MockLatLng(lat + 0.02, lng + 0.02)
           );
         }
         relayout() {}

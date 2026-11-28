@@ -81,7 +81,7 @@ function makeCandidate(overrides: Partial<PublicRestroomCandidateSummary> = {}):
     wheelchair_accessible: true,
     baby_changing_available: false,
     coordinate_status: "unlocated",
-    facility_hash: "hash_hyowon_0000111122223333",
+    facility_hash: `hash_${overrides.id ?? "cand-1"}_0000111122223333`,
     source_base_date: "2026-06-30",
     attribution_text: "경기도 수원시",
     ...overrides,
@@ -518,7 +518,7 @@ describe("MapDiscoveryClient '이 지역 재검색' 통합 및 비동기 race/�
       harness.setBounds({
         south: 37.256,
         west: 127.016,
-        north: 37.276,
+        north: 37.282,
         east: 127.046,
       });
     });
@@ -569,7 +569,7 @@ describe("MapDiscoveryClient '이 지역 재검색' 통합 및 비동기 race/�
       harness.setBounds({
         south: 37.256,
         west: 127.016,
-        north: 37.276,
+        north: 37.282,
         east: 127.046,
       });
     });
@@ -832,5 +832,164 @@ describe("MapDiscoveryClient '이 지역 재검색' 통합 및 비동기 race/�
     fireEvent.click(screen.getByTestId("search-this-area-btn"));
     await waitFor(() => expect(candidateFetchFn).toHaveBeenCalledTimes(4));
     expect(screen.getByText("이 지역 화장실 3곳")).toBeTruthy();
+  });
+
+  it("지도 이동 없이 동일 영역 반복 재검색을 지원하고 진행 중 중복 요청 차단·탐색 완료 안내·화면 영역 내 핀 개수 일치를 유지한다", async () => {
+    const OUT_OF_BOUNDS_OFFICIAL: PublicRestroomSummary = {
+      ...OFFICIAL_SUWON,
+      id: "official-outside-1",
+      name: "화면 밖 공식 화장실",
+      latitude: 37.31, // TEST_BOUNDS(north=37.285) 밖
+      longitude: 127.03,
+    };
+    const SAME_COORD_OFFICIAL: PublicRestroomSummary = {
+      ...OFFICIAL_SUWON,
+      id: "official-suwon-overlap",
+      name: "수원시청 별관 2층 화장실",
+      latitude: OFFICIAL_SUWON.latitude,
+      longitude: OFFICIAL_SUWON.longitude,
+    };
+
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.startsWith("/api/v1/events") || url.startsWith("/api/v1/usage-counts")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.startsWith("/api/v1/restrooms?")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            data: {
+              items: [OFFICIAL_SUWON, SAME_COORD_OFFICIAL, OUT_OF_BOUNDS_OFFICIAL],
+            },
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response(JSON.stringify({ ok: true, data: { items: [] } }), {
+        status: 200,
+      });
+    }) as typeof fetch;
+
+    const harness = createTestMapProvider(TEST_BOUNDS);
+    let resolveSlowFetch!: (val: {
+      items: PublicRestroomCandidateSummary[];
+      regionCodes: string[];
+      regionNames: string[];
+      tooWide: boolean;
+      totalReturned: number;
+      nextCursor: string | null;
+      hasMore: boolean;
+    }) => void;
+    let callIdx = 0;
+
+    const candidateFetchFn = vi.fn(async () => {
+      callIdx += 1;
+      if (callIdx === 1) {
+        return await new Promise<Parameters<typeof resolveSlowFetch>[0]>(
+          (resolve) => {
+            resolveSlowFetch = resolve;
+          }
+        );
+      }
+      return {
+        items: [],
+        regionCodes: ["41115"],
+        regionNames: ["경기도 수원시 팔달구"],
+        tooWide: false,
+        totalReturned: 0,
+        nextCursor: null,
+        hasMore: false,
+      };
+    });
+
+    const candidateResolveFn = vi.fn(async (items, options) =>
+      resolveViewportCandidatesWithKakao(items, {
+        ...options,
+        keywordSearchFn: async () => [],
+        addressSearchFn: async () => [
+          {
+            roadAddress: "경기도 수원시 팔달구 효원로 275",
+            jibunAddress: "",
+            lat: 37.265,
+            lng: 127.032,
+          },
+        ],
+      })
+    );
+
+    render(
+      React.createElement(MapDiscoveryClient, {
+        providerFactory: () => harness.provider,
+        candidateFetchFn,
+        candidateResolveFn,
+      })
+    );
+
+    // 화면 밖 공식 화장실은 제외되어 2곳만 집계되고, 겹친 2개 마커는 미세 분산되어 2개 모두 렌더링됨
+    await waitFor(() => {
+      expect(screen.getByText("이 지역 화장실 2곳")).toBeTruthy();
+      expect(harness.getMarkers()).toHaveLength(2);
+    });
+    const initialMarkers = harness.getMarkers();
+    expect(
+      initialMarkers[0].position.lat !== initialMarkers[1].position.lat ||
+        initialMarkers[0].position.lng !== initialMarkers[1].position.lng
+    ).toBe(true);
+
+    // 지도 이동 없이 동일 영역 반복 재검색 버튼 노출 확인 + 진행 중 연타 시 중복 요청 차단
+    const sameAreaBtn = screen.getByTestId("search-more-candidates-btn");
+    fireEvent.click(sameAreaBtn);
+    fireEvent.click(sameAreaBtn);
+    expect(candidateFetchFn).toHaveBeenCalledTimes(1);
+    expect(
+      (screen.getByTestId("search-more-candidates-btn") as HTMLButtonElement).disabled
+    ).toBe(true);
+
+    await act(async () => {
+      resolveSlowFetch({
+        items: [
+          makeCandidate({
+            id: "same-area-cand-1",
+            name: "동일 영역 신규 후보",
+            road_address: "경기도 수원시 팔달구 효원로 275",
+          }),
+        ],
+        regionCodes: ["41115"],
+        regionNames: ["경기도 수원시 팔달구"],
+        tooWide: false,
+        totalReturned: 1,
+        nextCursor: "o:1",
+        hasMore: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("이 지역 화장실 3곳")).toBeTruthy();
+    });
+
+    // 이동 없이 2차 클릭 -> 탐색 완료 응답(items: [], hasMore: false) -> 완료 안내 배지 표시 및 기존 3곳 유지
+    fireEvent.click(screen.getByTestId("search-more-candidates-btn"));
+    await waitFor(() => expect(candidateFetchFn).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(screen.getByTestId("candidate-search-status-pill").textContent).toContain(
+        "현재 영역 추가 후보 탐색 완료"
+      );
+    });
+    expect(screen.getByText("이 지역 화장실 3곳")).toBeTruthy();
+
+    // 지도 확대(bounds 축소) 시 화면 밖으로 나간 핀을 즉시 개수에서 제외 (자동 재조회 없이 갱신)
+    act(() => {
+      harness.setBounds({
+        south: 37.264,
+        west: 127.03,
+        north: 37.266,
+        east: 127.035,
+      });
+    });
+    fireEvent.click(screen.getByTestId("map-zoom-in-btn"));
+    await waitFor(() => {
+      expect(screen.getByText("이 지역 화장실 1곳")).toBeTruthy();
+    });
   });
 });
