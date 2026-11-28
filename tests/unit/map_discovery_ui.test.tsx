@@ -697,5 +697,208 @@ describe("TASK 16: Map Discovery UI - Cards, Filters, BottomSheet, Directions & 
       await waitFor(() => expect(screen.queryByText("조회 중")).toBeNull());
       expect(rejectFirst).toBeDefined();
     });
+
+    it("6) TASK 4: 최초 진입 시 현재 위치 확보 성공 시 해당 위치로 1회 이동·주변 조회하고 불필요한 수원 조회와 재추적을 하지 않는다", async () => {
+      const gangnamCoords = { lat: 37.498, lng: 127.028 };
+      const locSpy = vi
+        .spyOn(locationLib, "getCurrentUserLocation")
+        .mockResolvedValue({
+          success: true,
+          coords: gangnamCoords,
+        });
+
+      const provider = createMockProvider();
+      render(<MapDiscoveryClient providerFactory={() => provider} />);
+
+      await waitFor(() => expect(getRestroomFetchCalls(fetchSpy)).toHaveLength(1));
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 320));
+      });
+
+      const calls = getRestroomFetchCalls(fetchSpy);
+      expect(calls).toHaveLength(1);
+      const reqUrl = new URL(String(calls[0][0]), "http://localhost");
+      expect(Number(reqUrl.searchParams.get("centerLat"))).toBeCloseTo(
+        gangnamCoords.lat,
+        5
+      );
+      expect(Number(reqUrl.searchParams.get("centerLng"))).toBeCloseTo(
+        gangnamCoords.lng,
+        5
+      );
+      expect(locSpy).toHaveBeenCalledTimes(1);
+      expect(provider.setCenter).toHaveBeenCalledWith(gangnamCoords, true);
+      expect(
+        capturedMarkers.some((m) => m.id === "user_current_location")
+      ).toBe(true);
+    });
+
+    it("7) TASK 4: 최초 진입 시 위치 권한이 거부(denied)되면 수원시청 기본 위치로 1회 조회하고 오류 배너를 띄우지 않는다", async () => {
+      const originalPermissions = (navigator as any).permissions;
+      (navigator as any).permissions = {
+        query: vi.fn().mockResolvedValue({ state: "denied" }),
+      };
+      const locSpy = vi.spyOn(locationLib, "getCurrentUserLocation");
+
+      try {
+        const provider = createMockProvider();
+        render(<MapDiscoveryClient providerFactory={() => provider} />);
+
+        await waitFor(() =>
+          expect(getRestroomFetchCalls(fetchSpy)).toHaveLength(1)
+        );
+        const reqUrl = new URL(
+          String(getRestroomFetchCalls(fetchSpy)[0][0]),
+          "http://localhost"
+        );
+        expect(Number(reqUrl.searchParams.get("centerLat"))).toBeCloseTo(
+          SUWON_DEFAULT_CENTER.lat,
+          6
+        );
+        expect(locSpy).not.toHaveBeenCalled();
+        expect(screen.queryByTestId("location-notice-banner")).toBeNull();
+      } finally {
+        (navigator as any).permissions = originalPermissions;
+      }
+    });
+
+    it("8) TASK 4: 위치 확인이 지연·실패(타임아웃)해도 지도를 차단하지 않고 수원시청 기본 위치로 조회한다", async () => {
+      vi.spyOn(locationLib, "getCurrentUserLocation").mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            setTimeout(() => {
+              resolve({
+                success: false,
+                coords: SUWON_DEFAULT_CENTER,
+                error: {
+                  code: "TIMEOUT",
+                  message: "위치 정보 확인 시간이 초과되었습니다.",
+                },
+              });
+            }, 340);
+          })
+      );
+
+      const provider = createMockProvider();
+      render(<MapDiscoveryClient providerFactory={() => provider} />);
+
+      // 비차단: 250ms 유예 이후 기본 위치 조회 시작
+      await waitFor(
+        () => expect(getRestroomFetchCalls(fetchSpy)).toHaveLength(1),
+        { timeout: 1000 }
+      );
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 150));
+      });
+
+      const calls = getRestroomFetchCalls(fetchSpy);
+      expect(calls).toHaveLength(1);
+      const reqUrl = new URL(String(calls[0][0]), "http://localhost");
+      expect(Number(reqUrl.searchParams.get("centerLat"))).toBeCloseTo(
+        SUWON_DEFAULT_CENTER.lat,
+        6
+      );
+      expect(screen.queryByTestId("location-notice-banner")).toBeNull();
+    });
+
+    it("9) TASK 4: 위치 확인 대기 중 사용자가 이미 지도를 이동하면 늦게 도착한 GPS 응답으로 중심을 덮어쓰지 않는다", async () => {
+      let resolveGeo!: (res: locationLib.GeolocationResult) => void;
+      vi.spyOn(locationLib, "getCurrentUserLocation").mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveGeo = resolve;
+          })
+      );
+
+      const provider = createMockProvider();
+      render(<MapDiscoveryClient providerFactory={() => provider} />);
+
+      await waitFor(() => expect(provider.init).toHaveBeenCalled());
+      await waitFor(
+        () => expect(getRestroomFetchCalls(fetchSpy)).toHaveLength(1),
+        { timeout: 1000 }
+      );
+
+      // 사용자가 먼저 지도를 부산 영역으로 수동 이동
+      act(() => {
+        capturedOptions?.onBoundsChanged?.({
+          south: 35.15,
+          west: 129.05,
+          north: 35.17,
+          east: 129.07,
+        });
+      });
+      expect(screen.getByTestId("search-this-area-btn")).toBeDefined();
+
+      // 이후 늦은 GPS 응답 도착 (서울 강남) -> 무시되어야 함
+      const seoulCoords = { lat: 37.498, lng: 127.028 };
+      await act(async () => {
+        resolveGeo({ success: true, coords: seoulCoords });
+        await Promise.resolve();
+      });
+
+      expect(getRestroomFetchCalls(fetchSpy)).toHaveLength(1);
+      expect(provider.setCenter).not.toHaveBeenCalledWith(seoulCoords, true);
+      expect(screen.getByTestId("search-this-area-btn")).toBeDefined();
+    });
+
+    it("10) TASK 4: 위치 확인 대기 중 사용자가 장소를 검색해 선택하면 늦은 GPS 응답이 검색 장소를 덮어쓰지 않는다", async () => {
+      let resolveGeo!: (res: locationLib.GeolocationResult) => void;
+      vi.spyOn(locationLib, "getCurrentUserLocation").mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveGeo = resolve;
+          })
+      );
+
+      const busanStation = {
+        id: "place-busan-1",
+        name: "부산역",
+        address: "부산광역시 동구 중앙대로 206",
+        lat: 35.115,
+        lng: 129.042,
+      };
+      const placeSearchFn = vi.fn().mockResolvedValue([busanStation]);
+
+      const provider = createMockProvider();
+      render(
+        <MapDiscoveryClient
+          providerFactory={() => provider}
+          placeSearchFn={placeSearchFn}
+          restroomSearchFn={vi.fn().mockResolvedValue([])}
+        />
+      );
+
+      await waitFor(() => expect(provider.init).toHaveBeenCalled());
+
+      // GPS 대기 중 사용자가 즉시 부산역 검색 및 선택
+      const input = screen.getByTestId("map-search-input");
+      fireEvent.change(input, { target: { value: "부산역" } });
+      fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+      const placeItem = await screen.findByTestId("place-result-place-busan-1");
+      fireEvent.click(placeItem);
+
+      await waitFor(() => expect(getRestroomFetchCalls(fetchSpy)).toHaveLength(1));
+
+      // 이후 늦은 GPS 응답 도착 (서울 강남) -> 무시되어야 함
+      const seoulCoords = { lat: 37.498, lng: 127.028 };
+      await act(async () => {
+        resolveGeo({ success: true, coords: seoulCoords });
+        await Promise.resolve();
+      });
+
+      const calls = getRestroomFetchCalls(fetchSpy);
+      expect(calls).toHaveLength(1);
+      const reqUrl = new URL(String(calls[0][0]), "http://localhost");
+      expect(Number(reqUrl.searchParams.get("centerLat"))).toBeCloseTo(
+        busanStation.lat,
+        5
+      );
+      expect(provider.setCenter).not.toHaveBeenCalledWith(seoulCoords, true);
+      expect(
+        capturedMarkers.some((m) => m.id === "search_place_anchor")
+      ).toBe(true);
+    });
   });
 });

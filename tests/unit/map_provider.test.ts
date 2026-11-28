@@ -20,7 +20,10 @@ import {
   buildGoogleMapsDirectionsUrl,
   buildAllDirectionUrls,
 } from "@/lib/maps/directions";
-import { getCurrentUserLocation } from "@/lib/maps/location";
+import {
+  getCurrentUserLocation,
+  getGeolocationPermissionState,
+} from "@/lib/maps/location";
 import {
   KAKAO_SDK_SCRIPT_ID,
   getKakaoMapApiKey,
@@ -184,6 +187,24 @@ describe("TASK 15: Map Provider & Kakao SDK Integration", () => {
       expect(result.coords.lat).toBe(37.2635);
       expect(result.coords.lng).toBe(127.0286);
       expect(result.error).toBeUndefined();
+    });
+
+    it("Permissions API 상태(granted/denied/prompt/미지원)를 안전하게 조회한다", async () => {
+      const originalPermissions = (navigator as any).permissions;
+      delete (navigator as any).permissions;
+      expect(await getGeolocationPermissionState()).toBe("unknown");
+
+      (navigator as any).permissions = {
+        query: vi.fn().mockResolvedValue({ state: "denied" }),
+      };
+      expect(await getGeolocationPermissionState()).toBe("denied");
+
+      (navigator as any).permissions = {
+        query: vi.fn().mockRejectedValue(new Error("Not supported")),
+      };
+      expect(await getGeolocationPermissionState()).toBe("unknown");
+
+      (navigator as any).permissions = originalPermissions;
     });
   });
 

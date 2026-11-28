@@ -36,6 +36,46 @@ const ERROR_MESSAGES: Record<GeolocationErrorCode, string> = {
   UNKNOWN: "위치 정보를 가져오는 중 알 수 없는 오류가 발생했습니다.",
 };
 
+export type GeolocationPermissionState =
+  | "granted"
+  | "denied"
+  | "prompt"
+  | "unknown";
+
+/**
+ * 브라우저 위치 권한 상태 안전 조회 (Permissions API 미지원 시 'unknown')
+ */
+export async function getGeolocationPermissionState(): Promise<GeolocationPermissionState> {
+  if (typeof window === "undefined" || typeof navigator === "undefined") {
+    return "unknown";
+  }
+  const permissions = (
+    navigator as Navigator & {
+      permissions?: {
+        query?: (desc: { name: PermissionName }) => Promise<{ state: string }>;
+      };
+    }
+  ).permissions;
+  if (!permissions || typeof permissions.query !== "function") {
+    return "unknown";
+  }
+  try {
+    const status = await permissions.query({
+      name: "geolocation" as PermissionName,
+    });
+    if (
+      status.state === "granted" ||
+      status.state === "denied" ||
+      status.state === "prompt"
+    ) {
+      return status.state;
+    }
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 /**
  * 브라우저 현재 위치 조회 (권한 검증 및 에러 안전 처리)
  */
